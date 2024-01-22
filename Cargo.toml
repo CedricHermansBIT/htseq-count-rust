@@ -1,5 +1,5 @@
 [package]
-name = "htseq_count_Rust"
+name = "htseq_count_rust"
 version = "0.1.0"
 edition = "2021"
 
