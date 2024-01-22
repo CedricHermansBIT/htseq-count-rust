@@ -203,12 +203,12 @@ fn main() {
                 continue;
             }
         }
-        let reference = reference_names[ref_id as usize].clone();
-        if map.contains_key(&reference) {
+        let reference = &reference_names[ref_id as usize];
+        if map.contains_key(reference) {
             let mut start_pos: u32 = record.start().try_into().unwrap();
             let end_pos: u32 = record.calculate_end().try_into().unwrap();
             // Start from the index of the first feature that starts before the read
-            let mut index = match map[&reference].binary_search_by(|f| f.start.cmp(&start_pos)) {
+            let mut index = match map[reference].binary_search_by(|f| f.start.cmp(&start_pos)) {
                 Ok(index) => index,
                 Err(index) => {
                     if index > 0 {
@@ -225,11 +225,11 @@ fn main() {
             let mut ambiguous = false;
             // Feature start should be before (or equal to) the read start and feature end should be after (or equal to) the read end
             // This means the read falls fully within the feature (no exon junction)
-            if map[&reference][index].start <= start_pos && map[&reference][index].end >= end_pos {
-                feature_name = &map[&reference][index].name;
-                while index < map[&reference].len() && map[&reference][index].start <= end_pos {
+            if map[reference][index].start <= start_pos && map[reference][index].end >= end_pos {
+                feature_name = &map[reference][index].name;
+                while index < map[reference].len() && map[reference][index].start <= end_pos {
                     // check if same feature name, otherwise ambiguous
-                    if feature_name != &map[&reference][index].name {
+                    if feature_name != &map[reference][index].name {
                         //println!("Ambiguous feature found! {}: {}:{}-{} (position: {}); (alternate: {}) (index: {})", map[&reference][index].name,reference, map[&reference][index].start, map[&reference][index].end, start_pos, feature_name, index);
                         ambiguous = true;
                         break;
@@ -251,16 +251,16 @@ fn main() {
                             continue;
                         }
                         let partial_end_pos = start_pos + cig.0;
-                        if  index < map[&reference].len()
-                            && map[&reference][index].start <= partial_end_pos
-                            && map[&reference][index].end >= start_pos
+                        if  index < map[reference].len()
+                            && map[reference][index].start <= partial_end_pos
+                            && map[reference][index].end >= start_pos
                         {
-                            let feature_name = &map[&reference][index].name;
-                            while index < map[&reference].len()
-                                && map[&reference][index].start <= partial_end_pos
+                            let feature_name = &map[reference][index].name;
+                            while index < map[reference].len()
+                                && map[reference][index].start <= partial_end_pos
                             {
                                 // check if same feature name, otherwise ambiguous
-                                if feature_name != &map[&reference][index].name {
+                                if feature_name != &map[reference][index].name {
                                     //println!("Ambiguous feature found! {}: {}:{}-{} (position: {}); (alternate: {}) (index: {})", map[&reference][index].name,reference, map[&reference][index].start, map[&reference][index].end, start_pos, feature_name, index);
                                     ambiguous = true;
                                     break;
