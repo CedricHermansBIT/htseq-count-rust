@@ -1,13 +1,10 @@
 [package]
 name = "htseq_count_rust"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 structopt = "0.3"
 bam = "0.1.4"
-
-[profile.release]
-debug = true

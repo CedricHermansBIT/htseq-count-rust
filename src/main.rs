@@ -1,5 +1,4 @@
-use bam::header::Tag;
-use bam::record::cigar::{self, Operation};
+use bam::record::cigar::Operation;
 use bam::record::tags::TagValue;
 use bam::BamReader;
 use std::collections::HashMap;
