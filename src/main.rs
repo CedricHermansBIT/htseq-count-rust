@@ -1,11 +1,9 @@
 // Importeer de benodigde modules
 use std::collections::HashMap;
 use std::fs::File;
-use std::hash::Hash;
 use std::io::{BufRead, BufReader};
-use std::ops::Index;
 use structopt::StructOpt;
-use bam::{record, BamReader, IndexedReader};
+use bam::BamReader;
 
 // Definieer een structuur om de argumenten op te slaan
 #[derive(StructOpt)]
@@ -50,7 +48,7 @@ struct Args {
 // Definieer een structuur om de feature-informatie op te slaan
 #[derive(Debug)]
 struct Feature {
-    type_: String,
+    //type_: String,
     name: String,
     chr: String,
     start: u32,
@@ -95,7 +93,7 @@ fn read_gtf(file_path: &str, feature_type_filter: &str) -> HashMap<String, Vec<F
             let chr = fields[0].to_string();
 
             let feature = Feature {
-                type_: feature_name.to_string(),
+                //type_: feature_name.to_string(),
                 name: name.to_string(),
                 chr,
                 start,
