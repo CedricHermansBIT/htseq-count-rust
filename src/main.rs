@@ -1,51 +1,50 @@
-// Importeer de benodigde modules
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use structopt::StructOpt;
 use bam::BamReader;
 
-// Definieer een structuur om de argumenten op te slaan
+// Use the structopt crate to parse command line arguments
 #[derive(StructOpt)]
 struct Args {
-    // Geef de naam en het type van de parameter n
+    // Number of threads
     #[structopt(short = "n", long = "number", default_value = "10", help="Number of threads")]
     n: u16,
 
-    // Geef de naam en het type van de parameter m
+    // Mode
     #[structopt(short = "m", long = "mode", default_value = "intersection-strict")]
     m: String,
 
-    // Geef de naam en het type van de parameter --stranded
+    // Stranded
     #[structopt(long = "stranded")]
     stranded: bool,
 
-    // Geef de naam en het type van de parameter a
+    // Quality filter
     #[structopt(short = "a", long = "amount", default_value = "10", help="Skip all reads with MAPQ alignment quality lower than the given minimum value (default: 10). MAPQ is the 5th column of a SAM/BAM file and its usage depends on the software used to map the reads.")]
     a: i32,
 
-    // Geef de naam en het type van de parameter t
+    // Type of feature to be used
     #[structopt(short = "t", long = "type", default_value = "exon", help="Feature type (3rd column in GTF file) to be used, all features of other type are ignored (default, suitable for Ensembl GTF files: exon)")]
     t: String,
 
-    // Geef de naam en het type van de parameter i
+    // Feature ID
     #[structopt(short = "i", long = "id", default_value = "gene_name", help="GTF attribute to be used as feature ID (default, suitable for Ensembl GTF files: gene_id). All feature of the right type (see -t option) within the same GTF
     attribute will be added together. The typical way of using this option is to count all exonic reads from each gene and add the exons but other uses are possible
     as well. You can call this option multiple times: in that case, the combination of all attributes separated by colons (:) will be used as a unique identifier,
     e.g. for exons you might use -i gene_id -i exon_number.")]
-    i: String,
+    i: Vec<String>,
 
-    // Geef de naam en het type van de parameter bam
+    // Name and type of the bam file
     #[structopt(name = "bam", default_value="test.bam")]
     bam: String,
 
-    // Geef de naam en het type van de parameter gtf
+    // Name and type of the gtf file
     #[structopt(name = "gtf", default_value="test.gtf")]
     gtf: String,
 }
 
 
-// Definieer een structuur om de feature-informatie op te slaan
+// Struct to store the features
 #[derive(Debug)]
 struct Feature {
     //type_: String,
@@ -117,19 +116,19 @@ fn main() {
     println!("stranded = {}", args.stranded);
     println!("a = {}", args.a);
     println!("t = {}", args.t);
-    println!("i = {}", args.i);
+    println!("i = {:?}", args.i);
     println!("bam = {}", args.bam);
     println!("gtf = {}", args.gtf);
     
-    // Lees bam file (eerst, indien probleem, sneller crashen)
+    // Try to open the bam file, if it fails, print an error message
     let bam = BamReader::from_path(args.bam, args.n).expect("Could not read bam file");
     let header = bam.header().clone();
     let reference_names: &[String] = header.reference_names();
     //println!("{:?}", reference_names);
 
     
-    // Lees het bestand en sla het resultaat op in een variabele
-    let map = read_gtf("test.gtf", args.t.as_str());
+    // Read the gtf file
+    let map = read_gtf(&args.gtf, args.t.as_str());
 
     let mut counts: HashMap<String, i32> =HashMap::new();
     
@@ -145,19 +144,21 @@ fn main() {
         if map.contains_key(&reference) {
             let start_pos: u32 = record.start().try_into().unwrap();
             let end_pos: u32 = record.calculate_end().try_into().unwrap();
-            if let Ok(index) = map[&reference].binary_search_by(|f| f.start.cmp(&start_pos)) {
-                // Begin met deze index en ga door totdat je een feature vindt die groter is dan de eindpositie van de read
-                let mut i = index;
-                while i < map[&reference].len() && map[&reference][i].start <= end_pos {
-                    // Controleer of de feature overlapt met de read
-                    if (map[&reference][i].end >= start_pos) && (map[&reference][i].end <= end_pos) {
-                        println!("Feature found! {}: {}:{}-{} (position: {})", map[&reference][i].name,reference, map[&reference][i].start, map[&reference][i].end, start_pos);
-                        let count = counts.entry(map[&reference][i].name.clone()).or_insert(0);
-                        *count += 1;
-                    }
-                    // Ga naar de volgende feature
-                    i += 1;
+            // Start from the index of the first feature that starts before the read
+            let index = match map[&reference].binary_search_by(|f| start_pos.cmp(&f.start)) {
+                Ok(index) => index,
+                Err(index) => if index > 0 { index - 1 } else { 0 },
+            };
+            let mut i = index;
+            while i < map[&reference].len() && map[&reference][i].start <= end_pos {
+                // Feature start should be before (or equal to) the read start and feature end should be after (or equal to) the read end
+                if map[&reference][i].start <= start_pos && map[&reference][i].end >= end_pos {
+                    println!("Feature found! {}: {}:{}-{} (position: {})", map[&reference][i].name,reference, map[&reference][i].start, map[&reference][i].end, start_pos);
+                    let count = counts.entry(map[&reference][i].name.clone()).or_insert(0);
+                    *count += 1;
                 }
+                // Ga naar de volgende feature
+                i += 1;
             }
         }
     }
