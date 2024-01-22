@@ -45,7 +45,7 @@ struct Args {
 
 
 // Struct to store the features
-#[derive(Debug)]
+#[derive(Debug,Eq, PartialEq, Hash)]
 struct Feature {
     //type_: String,
     name: String,
@@ -100,6 +100,7 @@ fn read_gtf(file_path: &str, feature_type_filter: &str) -> HashMap<String, Vec<F
             map.entry(feature.chr.clone()).or_default().push(feature);
         }
     }
+    // Sort the features by start position
     for features in map.values_mut() {
         features.sort_by(|a, b| a.start.cmp(&b.start));
     }
@@ -131,6 +132,10 @@ fn main() {
     let map = read_gtf(&args.gtf, args.t.as_str());
     // print last feature of chr1
     //println!("{:?}", map["chr1"][map["chr1"].len()-1]);
+    // print first feature of chr1
+    println!("{:?}", map["chr1"][0]);
+    // print index of feature that starts before 111476805
+    println!("{:?}",map["chr1"].binary_search_by(|f| f.start.cmp(&111476805)));
     
     
     let mut counts = HashMap::new();
@@ -161,13 +166,13 @@ fn main() {
             let start_pos: u32 = record.start().try_into().unwrap();
             let end_pos: u32 = record.calculate_end().try_into().unwrap();
             // Start from the index of the first feature that starts before the read
-            let mut index = match map[&reference].binary_search_by(|f| start_pos.cmp(&f.start)) {
+            let mut index = match map[&reference].binary_search_by(|f| f.start.cmp(&start_pos)) {
                 Ok(index) => index,
                 Err(index) => if index > 0 { 
                     //println!("{}", index);
                     index - 1 } else { 
-                    println!("index: {}, reference: {}, start_pos: {}, end_pos: {}", index, reference, start_pos, end_pos);
-                    std::process::exit(1)
+                    //println!("index: {}, reference: {}, start_pos: {}, end_pos: {}", index, reference, start_pos, end_pos);
+                    0
                  },
             };
             let mut feature_name= "".to_string();
