@@ -1,3 +1,4 @@
 target
 *.bam
 *.gtf
+perf.data
