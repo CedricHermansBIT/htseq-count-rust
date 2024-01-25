@@ -323,7 +323,7 @@ fn main() {
                 Err(index) => index,
             };
             //println!("{}: {}-{}/{}", reference, start_pos, end_pos, &map[reference][index].end);
-            let mut feature_name = &String::new();
+            let mut feature_name = &String::default();
             let mut feature_count = 0;
             let mut ambiguous = false;
             if index >= features.len() {
