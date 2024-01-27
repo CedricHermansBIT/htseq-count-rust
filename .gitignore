@@ -2,3 +2,5 @@ target
 *.bam
 *.gtf
 perf.data
+htseq
+*.sam
