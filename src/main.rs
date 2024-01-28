@@ -6,6 +6,47 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 use structopt::StructOpt;
 
+fn main() {
+    // Command line arguments
+    let args = Args::from_args();
+
+    if args.counts_output.is_some() {
+        // check if we have write access to the file, otherwise, crash at the start instead of waiting until the end
+        if let Err(e) = File::create(args.counts_output.clone().unwrap()) {
+            eprintln!("Could not create file: {}", e);
+            std::process::exit(1);
+        }
+    }
+
+    // Try to open the bam file, if it fails, print an error message
+    let bam = BamReader::from_path(args.bam.clone(), args.n).expect("Could not read bam file");
+    let header = bam.header().clone();
+    let reference_names: Vec<String> = header.reference_names().to_owned();
+    // bam fields: https://docs.rs/bam/0.3.0/bam/record/struct.Record.html
+
+    // Read the gtf file
+    let gtf_end_sorted = read_gtf(&args.gtf, args.t.as_str());
+    // Make a copy that is sorted by start position
+    let mut gtf_start_sorted = gtf_end_sorted.clone();
+    for features in gtf_start_sorted.values_mut() {
+        features.sort_by(|a, b| a.start.cmp(&b.start));
+    }
+
+
+    let mut counts = prepare_count_hashmap(&gtf_end_sorted);
+
+    let mut counter = 0;
+
+    count_reads(bam, &mut counter, &mut counts, &args, reference_names, gtf_end_sorted);
+
+    if args.counts_output.is_some() {
+        write_counts(counts, args, counter);
+    } else {
+        print_output(counts, args, counter);
+    }
+}
+
+
 // Use the structopt crate to parse command line arguments
 #[derive(StructOpt)]
 struct Args {
@@ -101,7 +142,7 @@ struct Args {
 }
 
 // Struct to store the features
-#[derive(Debug, Eq, PartialEq, Hash)]
+#[derive(Debug, Eq, PartialEq, Hash, Clone)]
 struct Feature {
     //type_: String,
     name: String,
@@ -109,6 +150,25 @@ struct Feature {
     start: u32,
     end: u32,
 }
+
+fn prepare_count_hashmap(gtf_end_sorted: &HashMap<String, Vec<Feature>>) -> HashMap<String, i32> {
+    let mut counts = HashMap::with_capacity(gtf_end_sorted.len());
+    // add all features to the map
+    for features in gtf_end_sorted.values() {
+        for feature in features {
+            counts.entry(feature.name.clone()).or_default();
+        }
+    }
+
+    // Add the special keys
+    counts.insert("__no_feature".to_string(), 0);
+    counts.insert("__ambiguous".to_string(), 0);
+    counts.insert("__not_aligned".to_string(), 0);
+    counts.insert("__too_low_aQual".to_string(), 0);
+    counts.insert("__alignment_not_unique".to_string(), 0);
+    counts
+}
+
 
 fn read_gtf(file_path: &str, feature_type_filter: &str) -> HashMap<String, Vec<Feature>> {
     let mut map: HashMap<String, Vec<Feature>> = HashMap::new();
@@ -118,7 +178,9 @@ fn read_gtf(file_path: &str, feature_type_filter: &str) -> HashMap<String, Vec<F
     for line in reader.lines() {
         counter += 1;
         if counter % 100000 == 0 {
-            println!("{} GFF lines processed.", counter);
+            //println!("{} GFF lines processed.", counter);
+            // print to stderr so we can redirect stdout to a file
+            eprintln!("{} GFF lines processed.", counter);
         }
         if let Ok(line) = line {
             if line.starts_with('#') {
@@ -160,7 +222,9 @@ fn read_gtf(file_path: &str, feature_type_filter: &str) -> HashMap<String, Vec<F
     for features in map.values_mut() {
         features.sort_by(|a, b| a.end.cmp(&b.end));
     }
-    println!("{} GFF lines processed.", counter);
+    //println!("{} GFF lines processed.", counter);
+    eprintln!("{} GFF lines processed.", counter);
+    
     map
 }
 
@@ -256,83 +320,41 @@ fn write_counts(counts: HashMap<String, i32>, args: Args, counter: i32) {
     }
 }
 
-fn main() {
-    // Command line arguments
-    let args = Args::from_args();
 
-    if args.counts_output.is_some() {
-        // check if we have write access to the file, otherwise, crash at the start instead of waiting until the end
-        if let Err(e) = File::create(args.counts_output.clone().unwrap()) {
-            eprintln!("Could not create file: {}", e);
-            std::process::exit(1);
-        }
-    }
-
-    // Try to open the bam file, if it fails, print an error message
-    let bam = BamReader::from_path(args.bam.clone(), args.n).expect("Could not read bam file");
-    let header = bam.header().clone();
-    let reference_names: Vec<String> = header.reference_names().to_owned();
-    // bam fields: https://docs.rs/bam/0.3.0/bam/record/struct.Record.html
-
-    // Read the gtf file
-    let map = read_gtf(&args.gtf, args.t.as_str());
-
-    let mut counts = HashMap::with_capacity(map.len());
-    // add all features to the map
-    for features in map.values() {
-        for feature in features {
-            counts.entry(feature.name.clone()).or_default();
-        }
-    }
-
-    // Add the special keys
-    counts.insert("__no_feature".to_string(), 0);
-    counts.insert("__ambiguous".to_string(), 0);
-    counts.insert("__not_aligned".to_string(), 0);
-    counts.insert("__too_low_aQual".to_string(), 0);
-    counts.insert("__alignment_not_unique".to_string(), 0);
-
-    let mut counter = 0;
-
+fn count_reads(bam: BamReader<File>, counter: &mut i32, counts: &mut HashMap<String, i32>, args: &Args, reference_names: Vec<String>, gtf_end_sorted: HashMap<String, Vec<Feature>>) {
     for record in bam {
-        counter += 1;
-        if counter % 100000 == 0 {
-            println!("{} records processed.", counter);
+        *counter += 1;
+        if *counter % 100000 == 0 {
+            //println!("{} records processed.", counter);
+            eprintln!("{} records processed.", counter);
         }
         let record = record.unwrap();
-        if should_skip_record(&record, &mut counts, &args) {
+        if should_skip_record(&record, counts, args) {
             continue;
         }
         let ref_id = record.ref_id();
 
         let reference = &reference_names[ref_id as usize];
-        if map.contains_key(reference) {
+        if gtf_end_sorted.contains_key(reference) {
             let mut start_pos: u32 = record.start().try_into().unwrap();
             let end_pos: u32 = record.calculate_end().try_into().unwrap();
-            let features = &map[reference];
+            let features = &gtf_end_sorted[reference];
 
             // Start from the index of the first feature that ends after the read start
-            let mut index = match features.binary_search_by(|f| {
-                if f.end <= start_pos {
-                    std::cmp::Ordering::Less
-                } else {
-                    std::cmp::Ordering::Greater
-                }
-            }) {
-                Ok(index) => index,
-                Err(index) => index,
-            };
+            let mut startindex = get_start_index(features, start_pos);
+
+
             //println!("{}: {}-{}/{}", reference, start_pos, end_pos, &map[reference][index].end);
             let mut feature_name = &String::default();
             let mut feature_count = 0;
             let mut ambiguous = false;
-            if index >= features.len() {
+            if startindex >= features.len() {
                 // No feature found for this read
                 let count = counts.entry("__no_feature".to_string()).or_insert(0);
                 *count += 1;
                 continue;
             }
-            let mut current_feature = &map[reference][index];
+            let mut current_feature = &gtf_end_sorted[reference][startindex];
 
             // case 1: read is fully within feature -> count feature
             //   RRR
@@ -359,8 +381,8 @@ fn main() {
             // This means the read falls fully within the feature (no exon junction)
             if current_feature.start <= start_pos && current_feature.end >= end_pos {
                 feature_name = &current_feature.name;
-                while index < features.len() && current_feature.start <= end_pos {
-                    current_feature = &map[reference][index];
+                while startindex < features.len() && current_feature.start <= end_pos {
+                    current_feature = &gtf_end_sorted[reference][startindex];
                     // check if same feature name, otherwise ambiguous
                     if feature_name != &current_feature.name {
                         //println!("Ambiguous feature found! {}: {}:{}-{} (position: {}); (alternate: {}) (index: {})", map[&reference][index].name,reference, map[&reference][index].start, map[&reference][index].end, start_pos, feature_name, index);
@@ -369,7 +391,7 @@ fn main() {
                     }
                     //println!("Feature found! {}: {}:{}-{} (position: {})", map[&reference][index].name,reference, map[&reference][index].start, map[&reference][index].end, start_pos);
                     feature_count = 1;
-                    index += 1;
+                    startindex += 1;
                 }
             // If the read is not fully within the feature, we might need to check for exon junctions
             } else {
@@ -384,13 +406,13 @@ fn main() {
                             continue;
                         }
                         let partial_end_pos = start_pos + cig.0;
-                        if index < features.len()
+                        if startindex < features.len()
                             && current_feature.start <= partial_end_pos
                             && current_feature.end >= start_pos
                         {
                             let feature_name = &current_feature.name;
-                            while index < features.len() {
-                                current_feature = &map[reference][index];
+                            while startindex < features.len() {
+                                current_feature = &gtf_end_sorted[reference][startindex];
                                 if current_feature.start > partial_end_pos {
                                     break;
                                 }
@@ -402,7 +424,7 @@ fn main() {
                                 }
                                 //println!("Feature found! {}: {}:{}-{} (position: {})", map[&reference][index].name,reference, map[&reference][index].start, map[&reference][index].end, start_pos);
                                 feature_count = 1;
-                                index += 1;
+                                startindex += 1;
                             }
                         }
                         start_pos += cig.0;
@@ -423,10 +445,18 @@ fn main() {
             *count += 1;
         }
     }
+}
 
-    if args.counts_output.is_some() {
-        write_counts(counts, args, counter);
-    } else {
-        print_output(counts, args, counter);
-    }
+fn get_start_index(features: &Vec<Feature>, start_pos: u32) -> usize {
+    let startindex = match features.binary_search_by(|f| {
+        if f.end <= start_pos {
+            std::cmp::Ordering::Less
+        } else {
+            std::cmp::Ordering::Greater
+        }
+    }) {
+        Ok(index) => index,
+        Err(index) => index,
+    };
+    startindex
 }
