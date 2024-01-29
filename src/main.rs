@@ -356,26 +356,14 @@ fn count_reads(bam: BamReader<File>, counter: &mut i32, counts: &mut HashMap<Str
             let end_pos: u32 = record.calculate_end().try_into().unwrap();
             let features = &gtf_end_sorted[reference];
 
-            // Start from the index of the first feature that ends after the read start
-            let mut startindex = get_start_index(&features.0, start_pos, end_pos);
-            //eprintln!("startindex: {}", startindex);
-            // Get end index of the first feature that starts after the read end
-            let mut endindex = get_end_index(&features.1, start_pos, end_pos);
             let mut ambiguous = false;
 
-            if String::from_utf8_lossy(record.name())=="SRR001432.153301 USI-EAS21_0008_3445:8:4:393:300 length=25" {
+            //if String::from_utf8_lossy(record.name())=="SRR001432.153301 USI-EAS21_0008_3445:8:4:393:300 length=25" {
                 //println!("{}: {}-{}", String::from_utf8_lossy(record.name()), record.start(), record.calculate_end());
                 //eprintln!("startindex: {}, endindex: {}", startindex, endindex);
                 //eprintln!("feature: {:?}", features.0[startindex]);
                 //std::process::exit(1);
-            }
-
-            if startindex >= features.0.len() {
-                // No feature found for this read
-                let count = counts.entry("__no_feature".to_string()).or_insert(0);
-                *count += 1;
-                continue;
-            }
+            //}
             
             // case 1: read is fully within feature -> count feature
             //   RRR
@@ -403,7 +391,7 @@ fn count_reads(bam: BamReader<File>, counter: &mut i32, counts: &mut HashMap<Str
             let mut feature_name = String::default();
             if cigar.len() == 1 && cigar.iter().next().unwrap().1 == Operation::AlnMatch {
                 //eprintln!("startindex: {}, endindex: {}", startindex, endindex);
-                feature_name = process_partial_read(&gtf_end_sorted, reference, &mut startindex, features, endindex, start_pos, end_pos, &mut ambiguous);
+                feature_name = process_partial_read(&gtf_end_sorted, reference, features, start_pos, end_pos, &mut ambiguous);
             } else if cigar.len()>1 {
                 feature_name= String::default();
                 // construct partial reads for each cigar element with AlnMatch
@@ -420,10 +408,7 @@ fn count_reads(bam: BamReader<File>, counter: &mut i32, counts: &mut HashMap<Str
                     }
                     let partial_end_pos = start_pos + cig.0;
                     partial_reads.push((start_pos, partial_end_pos));
-                    startindex = get_start_index(&features.0, start_pos, partial_end_pos);
-                    endindex = get_end_index(&features.1, start_pos, partial_end_pos);
-
-                    let temp_feature_name = process_partial_read(&gtf_end_sorted, reference, &mut startindex, features, endindex, start_pos, partial_end_pos, &mut ambiguous);
+                    let temp_feature_name = process_partial_read(&gtf_end_sorted, reference, features,  start_pos, partial_end_pos, &mut ambiguous);
                     // if ambiguous flag is set, we can stop here, otherwise we can add the feature name to the list
                     if ambiguous {
                         break;
@@ -491,24 +476,27 @@ fn count_reads(bam: BamReader<File>, counter: &mut i32, counts: &mut HashMap<Str
     }
 }
 
-fn process_partial_read(gtf_end_sorted: &HashMap<String, (Vec<Feature>, Vec<Feature>)>, reference: &String, startindex: &mut usize, features: &(Vec<Feature>, Vec<Feature>), endindex: usize, start_pos: u32, end_pos: u32, ambiguous: &mut bool) -> String {
+fn process_partial_read(gtf_end_sorted: &HashMap<String, (Vec<Feature>, Vec<Feature>)>, reference: &String, features: &(Vec<Feature>, Vec<Feature>), start_pos: u32, end_pos: u32, ambiguous: &mut bool) -> String {
     let mut feature_name = String::default();
-    if *startindex >= features.0.len() {
+    let mut startindex = get_start_index(&features.0, start_pos, end_pos);
+    let endindex = get_end_index(&features.1, start_pos, end_pos);
+
+    if startindex >= features.0.len() {
         // No feature found for this read
         feature_name = String::default();
         *ambiguous = false;
         return feature_name;
     }
-    let mut current_feature = &gtf_end_sorted[reference].0[*startindex];
-    while *startindex < features.0.len() && endindex > current_feature.end_sorted_index {
+    let mut current_feature = &gtf_end_sorted[reference].0[startindex];
+    while startindex < features.0.len() && endindex > current_feature.end_sorted_index {
         if feature_name == String::default() {
             if current_feature.start <= start_pos && current_feature.end >= end_pos {
                 feature_name = current_feature.name.clone();
             }
             else {
-                *startindex += 1;
-                if *startindex < features.0.len() {
-                    current_feature = &gtf_end_sorted[reference].0[*startindex];
+                startindex += 1;
+                if startindex < features.0.len() {
+                    current_feature = &gtf_end_sorted[reference].0[startindex];
                 }
                 continue;
             }
@@ -521,9 +509,9 @@ fn process_partial_read(gtf_end_sorted: &HashMap<String, (Vec<Feature>, Vec<Feat
             break;
         }
         //println!("Feature found! {}: {}:{}-{} (position: {})", map[&reference][index].name,reference, map[&reference][index].start, map[&reference][index].end, start_pos);
-        *startindex += 1;
-        if *startindex < features.0.len() {
-            current_feature = &gtf_end_sorted[reference].0[*startindex];
+        startindex += 1;
+        if startindex < features.0.len() {
+            current_feature = &gtf_end_sorted[reference].0[startindex];
         }
     }
     
