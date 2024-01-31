@@ -1,12 +1,54 @@
 use bam::record::cigar::Operation;
 use bam::record::tags::TagValue;
 use bam::BamReader;
+use feature::Feature;
+use intervaltree::IntervalTree;
+use interval::Interval;
+use std::cmp::{max, min};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 use structopt::StructOpt;
 
+mod feature;
+mod intervaltree;
+mod interval;
+mod node;
+
+use node::Node;
+
 fn main() {
+    // test intervaltree
+    let mut tree = IntervalTree::new();
+    tree.insert(0, 10, Some(Feature {
+        name: "test".to_string(),
+        chr: "chr1".to_string(),
+        start: 0,
+        end: 10,
+        start_sorted_index: 0,
+        end_sorted_index: 0
+    }));
+
+    let interval = Interval::new(0, 10, Some(Feature {
+        name: "test".to_string(),
+        chr: "chr1".to_string(),
+        start: 0,
+        end: 10,
+        start_sorted_index: 0,
+        end_sorted_index: 0
+    }));
+
+    println!("{:?}",interval);
+    let args = Args::from_args();
+
+    // test node
+    read_gtf(&args.gtf, args.t.as_str());
+
+    // exit(1) to prevent the rest of the program from running
+    std::process::exit(1);
+
+
+
     // Command line arguments
     let args = Args::from_args();
 
@@ -27,6 +69,14 @@ fn main() {
     // Read the gtf file
     let gtf_end_sorted = read_gtf(&args.gtf, args.t.as_str());
    
+   if args.export_feature_map.is_some() {
+        let mut file = File::create(args.export_feature_map.clone().unwrap()).expect("Unable to create file");
+        for (chr, features) in gtf_end_sorted.iter() {
+            for feature in features.0.iter() {
+                file.write_all(format!("{}\t{}\t{}\t{}\t{}\t{}\n", chr, feature.start, feature.end, feature.name, feature.start_sorted_index, feature.end_sorted_index).as_bytes()).expect("Unable to write data");
+            }
+        }
+    }
 
 
     let mut counts = prepare_count_hashmap(&gtf_end_sorted);
@@ -135,19 +185,14 @@ struct Args {
         help = "Filename to output the counts to instead of stdout."
     )]
     counts_output: Option<String>,
-}
 
-// Struct to store the features
-#[derive(Debug, Eq, PartialEq, Hash, Clone)]
-struct Feature {
-    //type_: String,
-    name: String,
-    chr: String,
-    start: u32,
-    end: u32,
-    start_sorted_index: usize,
-    end_sorted_index: usize,
-
+    // Export feature map
+    #[structopt(
+        short = "f",
+        long = "export_feature_map",
+        help = "Filename to output the feature map for debugging purposes."
+    )]
+    export_feature_map: Option<String>,
 }
 
 fn prepare_count_hashmap(gtf_end_sorted: &HashMap<String, (Vec<Feature>, Vec<Feature>)>) -> HashMap<String, i32> {
@@ -173,6 +218,7 @@ fn read_gtf(file_path: &str, feature_type_filter: &str) -> HashMap<String, (Vec<
     let file = File::open(file_path).expect("Kan het bestand niet openen");
     let reader = BufReader::new(file);
     let mut counter = 0;
+    let mut intervals: Vec<Interval> = Vec::new();
     for line in reader.lines() {
         counter += 1;
         if counter % 100000 == 0 {
@@ -207,31 +253,39 @@ fn read_gtf(file_path: &str, feature_type_filter: &str) -> HashMap<String, (Vec<
             let feature = Feature {
                 name: name.to_string(),
                 chr: chr.clone(),
-                start,
-                end,
+                start: start-1,
+                end: end,
                 start_sorted_index: 0,
                 end_sorted_index: 0
             };
 
+            intervals.push(Interval::new((start-1) as i32, end as i32, Some(feature.clone())));
+
+
             map.entry(chr).or_default().push(feature);
         }
+    }
+    let node = Node::from_intervals(intervals);
+    // print the center node (withouth the children)
+    if let Some(node) = node {
+        eprintln!("x_center: {}, s_center: {:?}, depth: {}, balance: {}", node.x_center, node.s_center, node.depth, node.balance);
     }
 
     let mut result: HashMap<String, (Vec<Feature>, Vec<Feature>)> = HashMap::new();
 
-    for (chr, mut features) in map {
-        features.sort_by(|a, b| a.end.cmp(&b.end));
-        for i in 0..features.len() {
-            features[i].end_sorted_index = i;
+    for (chr, mut end_sorted) in map {
+        end_sorted.sort_by(|a, b| a.end.cmp(&b.end));
+        for i in 0..end_sorted.len() {
+            end_sorted[i].end_sorted_index = i;
         }
-        let mut start_sorted = features.clone();
+        let mut start_sorted = end_sorted.clone();
         start_sorted.sort_by(|a, b| a.start.cmp(&b.start));
         for i in 0..start_sorted.len() {
             start_sorted[i].start_sorted_index = i;
             // also add the start index to the end_sorted features
-            features[start_sorted[i].end_sorted_index].start_sorted_index = i;
+            end_sorted[start_sorted[i].end_sorted_index].start_sorted_index = i;
         }
-        result.insert(chr, (features, start_sorted));
+        result.insert(chr, (end_sorted, start_sorted));
     }
 
     eprintln!("{} GFF lines processed.", counter);
@@ -340,7 +394,7 @@ fn count_reads(bam: BamReader<File>, counter: &mut i32, counts: &mut HashMap<Str
             eprintln!("{} records processed.", counter);
         }
         let record = record.unwrap();
-        if String::from_utf8_lossy(record.name())=="SRR001432.153301 USI-EAS21_0008_3445:8:4:393:300 length=25" {
+        if String::from_utf8_lossy(record.name())=="SRR001432.281211 USI-EAS21_0008_3445:8:7:657:535 length=25" {
             //println!("{}: {}-{}", String::from_utf8_lossy(record.name()), record.start(), record.calculate_end());
             eprintln!("this one");
         }
@@ -386,12 +440,14 @@ fn count_reads(bam: BamReader<File>, counter: &mut i32, counts: &mut HashMap<Str
             //AAAAAAA
             //BBBBBBB
             
+            
             // if cigar has length 1 and is a match, we can use the start and end positions of the read
             let cigar = record.cigar();
             let mut feature_name = String::default();
             if cigar.len() == 1 && cigar.iter().next().unwrap().1 == Operation::AlnMatch {
+                
                 //eprintln!("startindex: {}, endindex: {}", startindex, endindex);
-                feature_name = process_partial_read(&gtf_end_sorted, reference, features, start_pos, end_pos, &mut ambiguous);
+                feature_name = process_partial_read(features, start_pos, end_pos, &mut ambiguous);
             } else if cigar.len()>1 {
                 feature_name= String::default();
                 // construct partial reads for each cigar element with AlnMatch
@@ -408,7 +464,7 @@ fn count_reads(bam: BamReader<File>, counter: &mut i32, counts: &mut HashMap<Str
                     }
                     let partial_end_pos = start_pos + cig.0;
                     partial_reads.push((start_pos, partial_end_pos));
-                    let temp_feature_name = process_partial_read(&gtf_end_sorted, reference, features,  start_pos, partial_end_pos, &mut ambiguous);
+                    let temp_feature_name = process_partial_read(features,  start_pos, partial_end_pos, &mut ambiguous);
                     // if ambiguous flag is set, we can stop here, otherwise we can add the feature name to the list
                     if ambiguous {
                         break;
@@ -476,28 +532,57 @@ fn count_reads(bam: BamReader<File>, counter: &mut i32, counts: &mut HashMap<Str
     }
 }
 
-fn process_partial_read(gtf_end_sorted: &HashMap<String, (Vec<Feature>, Vec<Feature>)>, reference: &String, features: &(Vec<Feature>, Vec<Feature>), start_pos: u32, end_pos: u32, ambiguous: &mut bool) -> String {
+fn process_partial_read(features: &(Vec<Feature>, Vec<Feature>), start_pos: u32, end_pos: u32, ambiguous: &mut bool) -> String {
     let mut feature_name = String::default();
-    let mut startindex = get_start_index(&features.0, start_pos, end_pos);
+    let startindex = get_start_index(&features.0, start_pos, end_pos);
     let endindex = get_end_index(&features.1, start_pos, end_pos);
 
-    if startindex >= features.0.len() {
+    let start_feature_end_index = features.0[startindex].end_sorted_index;
+    let end_feature_start_index = features.1[endindex].start_sorted_index;
+
+    let index_range = min(startindex, start_feature_end_index)..max(endindex, end_feature_start_index);
+
+    // get all feature in index_range from both start and end sorted vectors, if they are the same, only collect one
+    let mut overlapping_features: Vec<Feature> = vec![];
+    for i in index_range {
+        let feature = features.0[i].clone();
+        // if feature (chrom + position +name) is already in the list, skip it 
+        if overlapping_features.iter().any(|f| f.chr == feature.chr && f.start == feature.start && f.end == feature.end && f.name == feature.name) {
+            continue;
+        }
+        overlapping_features.push(feature);
+        let feature = features.1[i].clone();
+        if overlapping_features.iter().any(|f| f.chr == feature.chr && f.start == feature.start && f.end == feature.end && f.name == feature.name) {
+            continue;
+        }
+        overlapping_features.push(feature);
+    }
+
+
+
+    if start_pos == 161647060 {
+        eprintln!("startindex: {}, endindex: {}", min(startindex, start_feature_end_index), max(endindex, end_feature_start_index));
+    }
+
+    if min(startindex, start_feature_end_index) >= features.0.len() {
         // No feature found for this read
         feature_name = String::default();
         *ambiguous = false;
         return feature_name;
     }
-    let mut current_feature = &gtf_end_sorted[reference].0[startindex];
-    while startindex < features.0.len() && endindex > current_feature.end_sorted_index {
+    for current_feature in overlapping_features.iter() {
+        if start_pos == 161647060 {
+            //eprintln!("index: {}, current_feature: {:?}", index, current_feature);
+        }
+
         if feature_name == String::default() {
             if current_feature.start <= start_pos && current_feature.end >= end_pos {
                 feature_name = current_feature.name.clone();
             }
             else {
-                startindex += 1;
-                if startindex < features.0.len() {
-                    current_feature = &gtf_end_sorted[reference].0[startindex];
-                }
+                //if index < features.0.len() {
+                //    current_feature = &gtf_sorted[reference].1[index];
+                //}
                 continue;
             }
         }
@@ -509,10 +594,6 @@ fn process_partial_read(gtf_end_sorted: &HashMap<String, (Vec<Feature>, Vec<Feat
             break;
         }
         //println!("Feature found! {}: {}:{}-{} (position: {})", map[&reference][index].name,reference, map[&reference][index].start, map[&reference][index].end, start_pos);
-        startindex += 1;
-        if startindex < features.0.len() {
-            current_feature = &gtf_end_sorted[reference].0[startindex];
-        }
     }
     
     feature_name
@@ -529,12 +610,7 @@ fn get_end_index(features: &[Feature], _start_pos: u32, end_pos: u32) -> usize{
     }) {
         Ok(index) | Err(index) => {
             //eprintln!("f.start>end_pos: {}, f.start: {}, end_pos: {}, index: {}, {}, feature:{:?}", features.len(), features[index].start, end_pos, index, features[index].start > end_pos, features[index]);
-            // TODO: fix this, it is not correct, it most likely doesn't hurt the results, but it hurts speed
-            if index+50<features.len() && features[index].start > end_pos {
-                index+50
-            } else {
-                features.len()-1
-            }
+            index + 1      
         }
     };
     endindex
@@ -550,13 +626,12 @@ fn get_start_index(features: &Vec<Feature>, start_pos: u32, _end_pos: u32) -> us
     }) {
         Ok(index) | Err(index) => {
             //eprintln!("f.end<start_pos: {}, f.end: {}, start_pos: {}, index: {}, {}, feature:{:?}", features.len(), features[index-1].end, start_pos, index, features[index-1].end < start_pos, features[index-1]);
-            // try pushing index back until we find the first feature that starts before the read start
-            let mut startindex = index;
-            while startindex > 0 && features[startindex-1].end > start_pos {
-                startindex -= 1;
+            if index > 0 {
+                index - 1
+            } else {
+                index
             }
-            startindex
         }
     };
-    startindex
+    features[startindex].end_sorted_index
 }
