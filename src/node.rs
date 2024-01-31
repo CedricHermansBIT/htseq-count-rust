@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use crate::interval::{self, Interval};
+use crate::interval::Interval;
 use std::collections::HashSet;
 
 #[derive(Debug, Eq, PartialEq, Clone)]
