@@ -19,15 +19,14 @@ use node::Node;
 
 fn main() {
     // test intervaltree
-    let mut tree = IntervalTree::new();
-    tree.insert(0, 10, Some(Feature {
+    let mut tree = IntervalTree::from_tuples(vec!((0, 10, Some(Feature {
         name: "test".to_string(),
         chr: "chr1".to_string(),
         start: 0,
         end: 10,
         start_sorted_index: 0,
         end_sorted_index: 0
-    }));
+    }))));
 
     let interval = Interval::new(0, 10, Some(Feature {
         name: "test".to_string(),
