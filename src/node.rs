@@ -207,19 +207,19 @@ impl Node {
         Ok(self)
     }
 
-    pub fn search_overlap(&self, point_list: Vec<i32>) -> Vec<Interval> {
-        let mut result = Vec::new();
+    pub fn search_overlap(&self, point_list: Vec<i32>) -> HashSet<Interval> {
+        let mut result = HashSet::new();
         for point in point_list {
             result.extend(self.search_point(point));
         }
         result
     }
 
-    pub fn search_point(&self, point: i32) -> Vec<Interval> {
-        let mut result = Vec::new();
+    pub fn search_point(&self, point: i32) -> HashSet<Interval> {
+        let mut result = HashSet::new();
         for interval in &self.s_center {
             if interval.contains_point(point) {
-                result.push(interval.clone());
+                result.insert(interval.clone());
             }
         }
         if point < self.x_center {

@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
@@ -10,7 +11,7 @@ use crate::Node;
 pub struct IntervalTree {
     pub all_intervals: HashSet<Interval>,
     pub top_node: Option<Box<Node>>,
-    pub boundary_table: HashMap<i32,i32>
+    pub boundary_table: BTreeMap<i32,i32>
 }
 
 impl IntervalTree {
@@ -34,7 +35,7 @@ impl IntervalTree {
             let mut it = IntervalTree {
                 all_intervals: unique_intervals.clone(),
                 top_node: Node::from_intervals(unique_intervals.clone()),
-                boundary_table: HashMap::new(),
+                boundary_table: BTreeMap::new(),
             };
             eprintln!("created top node");
 
@@ -48,7 +49,7 @@ impl IntervalTree {
             IntervalTree {
                 all_intervals: HashSet::new(),
                 top_node: None,
-                boundary_table: HashMap::new(),
+                boundary_table: BTreeMap::new(),
             }
         }
     }
@@ -283,5 +284,29 @@ impl IntervalTree {
         false
     }
 
+    pub fn overlap(&self, start: i32, end: i32) -> HashSet<Interval> {
+        // return a vector of all intervals that overlap with the given range
+        if self.is_empty() || start >= end {
+            return HashSet::new();
+        }
+        let root = self.top_node.clone().unwrap();
+        let mut result = root.search_point(start);
+        let boundary_table = &self.boundary_table;
+        let bound_begin = bisect_left(&boundary_table.keys().cloned().collect::<Vec<i32>>(), start);
+        let bound_end = bisect_left(&boundary_table.keys().cloned().collect::<Vec<i32>>(), end);
+        let overlapping_bounds = boundary_table.keys().skip(bound_begin).take(bound_end - bound_begin).collect::<Vec<&i32>>();
+        // make Vec<&i32> into Vec<i32>
+        let overlapping_bounds = overlapping_bounds.iter().map(|&x| *x).collect::<Vec<i32>>();
+        result.extend(root.search_overlap(overlapping_bounds));
+        result
 
+    }
+
+}
+
+fn bisect_left<T: Ord>(arr: &[T], value: T) -> usize {
+    match arr.binary_search(&value) {
+        Ok(index) => index,
+        Err(index) => index,
+    }   
 }
