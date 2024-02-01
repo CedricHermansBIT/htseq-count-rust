@@ -1,7 +1,8 @@
 #![allow(dead_code)]
 
 use crate::interval::Interval;
-use std::collections::HashSet;
+use std::{collections::HashSet, fs::File};
+use std::io::Write;
 
 #[derive(Debug, Eq, PartialEq, Clone)]
 pub struct Node {
@@ -42,11 +43,11 @@ impl Node {
         Node::new(interval.start, s_center)
     }
 
-    pub fn from_intervals(intervals: Vec<Interval>) -> Option<Box<Node>> {
+    pub fn from_intervals(intervals: HashSet<Interval>) -> Option<Box<Node>> {
         if intervals.is_empty() {
             None
         } else {
-            let mut sorted_intervals = intervals;
+            let mut sorted_intervals = intervals.into_iter().collect::<Vec<Interval>>();
             sorted_intervals.sort();
             Node::from_sorted_intervals(sorted_intervals)
         }
@@ -305,6 +306,27 @@ impl Node {
             return vec![]
         }
 
+    }
+
+    pub fn write_structure(&self, f: &mut File, indent: usize) -> std::fmt::Result {
+        let newline = "\n";
+        let spaces = " ".repeat(indent);
+
+        let _ = write!(f, "{}{}", self, newline);
+        if self.s_center.len() > 0 {
+            for interval in &self.s_center {
+                let _ = write!(f, "{} {}{}", spaces, interval, newline);
+            }
+        }
+        if let Some(left_node) = &self.left_node {
+            let _ = write!(f, "{}{}{}", spaces, "Left:", newline);
+            left_node.write_structure(f, indent+1)?;
+        }
+        if let Some(right_node) = &self.right_node {
+            let _ = write!(f, "{}{}{}", spaces, "Right:", newline);
+            right_node.write_structure(f, indent+1)?;
+        }
+        Ok(())
     }
 }
     
