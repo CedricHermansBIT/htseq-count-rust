@@ -36,6 +36,8 @@ fn main() {
 
     // Read the gtf file
     let gtf = read_gtf(&args.gtf, args.t.as_str());
+
+    eprintln!("{:?}",gtf["1"].overlap(24646121, 24646123));
    
     if args.export_feature_map.is_some() {
         let mut file = File::create(args.export_feature_map.clone().unwrap()).expect("Unable to create file");
