@@ -4,7 +4,6 @@ use bam::BamReader;
 use feature::Feature;
 use intervaltree::IntervalTree;
 use interval::Interval;
-use std::cmp::{max, min};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
@@ -18,36 +17,6 @@ mod node;
 use node::Node;
 
 fn main() {
-    // test intervaltree
-    let mut tree = IntervalTree::from_tuples(vec!((0, 10, Some(Feature {
-        name: "test".to_string(),
-        chr: "chr1".to_string(),
-        start: 0,
-        end: 10,
-        start_sorted_index: 0,
-        end_sorted_index: 0
-    }))));
-
-    let interval = Interval::new(0, 10, Some(Feature {
-        name: "test".to_string(),
-        chr: "chr1".to_string(),
-        start: 0,
-        end: 10,
-        start_sorted_index: 0,
-        end_sorted_index: 0
-    }));
-
-    println!("{:?}",interval);
-    let args = Args::from_args();
-
-    // test node
-    read_gtf(&args.gtf, args.t.as_str());
-
-    // exit(1) to prevent the rest of the program from running
-    std::process::exit(1);
-
-
-
     // Command line arguments
     let args = Args::from_args();
 
@@ -66,23 +35,24 @@ fn main() {
     // bam fields: https://docs.rs/bam/0.3.0/bam/record/struct.Record.html
 
     // Read the gtf file
-    let gtf_end_sorted = read_gtf(&args.gtf, args.t.as_str());
+    let gtf = read_gtf(&args.gtf, args.t.as_str());
    
-   if args.export_feature_map.is_some() {
+    if args.export_feature_map.is_some() {
         let mut file = File::create(args.export_feature_map.clone().unwrap()).expect("Unable to create file");
-        for (chr, features) in gtf_end_sorted.iter() {
-            for feature in features.0.iter() {
-                file.write_all(format!("{}\t{}\t{}\t{}\t{}\t{}\n", chr, feature.start, feature.end, feature.name, feature.start_sorted_index, feature.end_sorted_index).as_bytes()).expect("Unable to write data");
-            }
+        for (chr, tree) in gtf.iter() {
+            file.write_all(format!("{}:\n", chr).as_bytes()).expect("Unable to write data");
+            let _ = tree.top_node.clone().unwrap().write_structure(&mut file, 0);
         }
     }
 
+    // exit(1) to prevent the rest of the program from running
+    std::process::exit(1);
 
-    let mut counts = prepare_count_hashmap(&gtf_end_sorted);
+    let mut counts = prepare_count_hashmap(&gtf);
 
     let mut counter = 0;
 
-    count_reads(bam, &mut counter, &mut counts, &args, reference_names, gtf_end_sorted);
+    count_reads(bam, &mut counter, &mut counts, &args, reference_names, gtf);
 
     if args.counts_output.is_some() {
         write_counts(counts, args, counter);
@@ -194,12 +164,12 @@ struct Args {
     export_feature_map: Option<String>,
 }
 
-fn prepare_count_hashmap(gtf_end_sorted: &HashMap<String, (Vec<Feature>, Vec<Feature>)>) -> HashMap<String, i32> {
-    let mut counts = HashMap::with_capacity(gtf_end_sorted.len());
+fn prepare_count_hashmap(gtf: &HashMap<String, IntervalTree>) -> HashMap<String, i32> {
+    let mut counts = HashMap::with_capacity(gtf.len());
     // add all features to the map
-    for features in gtf_end_sorted.values() {
-        for feature in features.0.iter() {
-            counts.entry(feature.name.clone()).or_default();
+    for features in gtf.values() {
+        for feature in features.all_intervals.iter() {
+            counts.entry(feature.data.as_ref().unwrap().name.clone()).or_insert(0);
         }
     }
 
@@ -212,12 +182,11 @@ fn prepare_count_hashmap(gtf_end_sorted: &HashMap<String, (Vec<Feature>, Vec<Fea
     counts
 }
 
-fn read_gtf(file_path: &str, feature_type_filter: &str) -> HashMap<String, (Vec<Feature>, Vec<Feature>)> {
-    let mut map: HashMap<String, Vec<Feature>> = HashMap::new();
+fn read_gtf(file_path: &str, feature_type_filter: &str) -> HashMap<String, IntervalTree> {
+    let mut map: HashMap<String, Vec<Interval>> = HashMap::new();
     let file = File::open(file_path).expect("Kan het bestand niet openen");
     let reader = BufReader::new(file);
     let mut counter = 0;
-    let mut intervals: Vec<Interval> = Vec::new();
     for line in reader.lines() {
         counter += 1;
         if counter % 100000 == 0 {
@@ -258,33 +227,23 @@ fn read_gtf(file_path: &str, feature_type_filter: &str) -> HashMap<String, (Vec<
                 end_sorted_index: 0
             };
 
-            intervals.push(Interval::new((start-1) as i32, end as i32, Some(feature.clone())));
-
-
-            map.entry(chr).or_default().push(feature);
+            map.entry(chr).or_default().push(Interval::new((start-1) as i32, end as i32, Some(feature)));
         }
     }
-    let node = Node::from_intervals(intervals);
+    //let node = Node::from_intervals(intervals);
     // print the center node (withouth the children)
-    if let Some(node) = node {
-        eprintln!("x_center: {}, s_center: {:?}, depth: {}, balance: {}", node.x_center, node.s_center, node.depth, node.balance);
-    }
+    // construct the tree
+    // let tree= IntervalTree::from_tuples(tuples);
+    // let top_node = tree.top_node.unwrap();
+    // eprintln!("tree: center: {}, depth: {}, balance: {}", top_node.x_center, top_node.depth, top_node.balance);
+    // eprintln!("Boundary table: {:?}", tree.boundary_table);
 
-    let mut result: HashMap<String, (Vec<Feature>, Vec<Feature>)> = HashMap::new();
+    let mut result: HashMap<String, IntervalTree> = HashMap::new();
 
-    for (chr, mut end_sorted) in map {
-        end_sorted.sort_by(|a, b| a.end.cmp(&b.end));
-        for i in 0..end_sorted.len() {
-            end_sorted[i].end_sorted_index = i;
-        }
-        let mut start_sorted = end_sorted.clone();
-        start_sorted.sort_by(|a, b| a.start.cmp(&b.start));
-        for i in 0..start_sorted.len() {
-            start_sorted[i].start_sorted_index = i;
-            // also add the start index to the end_sorted features
-            end_sorted[start_sorted[i].end_sorted_index].start_sorted_index = i;
-        }
-        result.insert(chr, (end_sorted, start_sorted));
+    for (chr, intervals) in map {
+        let tree = IntervalTree::new(Some(intervals));
+        result.insert(chr, tree);
+        
     }
 
     eprintln!("{} GFF lines processed.", counter);
@@ -385,7 +344,7 @@ fn write_counts(counts: HashMap<String, i32>, args: Args, counter: i32) {
 }
 
 
-fn count_reads(bam: BamReader<File>, counter: &mut i32, counts: &mut HashMap<String, i32>, args: &Args, reference_names: Vec<String>, gtf_end_sorted: HashMap<String, (Vec<Feature>, Vec<Feature>)>) {
+fn count_reads(bam: BamReader<File>, counter: &mut i32, counts: &mut HashMap<String, i32>, args: &Args, reference_names: Vec<String>, gtf_end_sorted: HashMap<String, IntervalTree>) {
     for record in bam {
         *counter += 1;
         if *counter % 100000 == 0 {
@@ -400,6 +359,8 @@ fn count_reads(bam: BamReader<File>, counter: &mut i32, counts: &mut HashMap<Str
         if should_skip_record(&record, counts, args) {
             continue;
         }
+        // todo
+        unimplemented!("todo");
         
         let ref_id = record.ref_id();
 
@@ -531,69 +492,9 @@ fn count_reads(bam: BamReader<File>, counter: &mut i32, counts: &mut HashMap<Str
     }
 }
 
-fn process_partial_read(features: &(Vec<Feature>, Vec<Feature>), start_pos: u32, end_pos: u32, ambiguous: &mut bool) -> String {
+fn process_partial_read(features: &IntervalTree, start_pos: u32, end_pos: u32, ambiguous: &mut bool) -> String {
     let mut feature_name = String::default();
-    let startindex = get_start_index(&features.0, start_pos, end_pos);
-    let endindex = get_end_index(&features.1, start_pos, end_pos);
-
-    let start_feature_end_index = features.0[startindex].end_sorted_index;
-    let end_feature_start_index = features.1[endindex].start_sorted_index;
-
-    let index_range = min(startindex, start_feature_end_index)..max(endindex, end_feature_start_index);
-
-    // get all feature in index_range from both start and end sorted vectors, if they are the same, only collect one
-    let mut overlapping_features: Vec<Feature> = vec![];
-    for i in index_range {
-        let feature = features.0[i].clone();
-        // if feature (chrom + position +name) is already in the list, skip it 
-        if overlapping_features.iter().any(|f| f.chr == feature.chr && f.start == feature.start && f.end == feature.end && f.name == feature.name) {
-            continue;
-        }
-        overlapping_features.push(feature);
-        let feature = features.1[i].clone();
-        if overlapping_features.iter().any(|f| f.chr == feature.chr && f.start == feature.start && f.end == feature.end && f.name == feature.name) {
-            continue;
-        }
-        overlapping_features.push(feature);
-    }
-
-
-
-    if start_pos == 161647060 {
-        eprintln!("startindex: {}, endindex: {}", min(startindex, start_feature_end_index), max(endindex, end_feature_start_index));
-    }
-
-    if min(startindex, start_feature_end_index) >= features.0.len() {
-        // No feature found for this read
-        feature_name = String::default();
-        *ambiguous = false;
-        return feature_name;
-    }
-    for current_feature in overlapping_features.iter() {
-        if start_pos == 161647060 {
-            //eprintln!("index: {}, current_feature: {:?}", index, current_feature);
-        }
-
-        if feature_name == String::default() {
-            if current_feature.start <= start_pos && current_feature.end >= end_pos {
-                feature_name = current_feature.name.clone();
-            }
-            else {
-                //if index < features.0.len() {
-                //    current_feature = &gtf_sorted[reference].1[index];
-                //}
-                continue;
-            }
-        }
-        // check if same feature name, otherwise ambiguous
-        if feature_name != current_feature.name && current_feature.start <= start_pos && current_feature.end >= end_pos {
-            // record.name() is &[u8]
-            //eprintln!("Ambiguous: {}:{}-{} (position: {}); (current: {}, alternate: {}) (index: {}) (Read id: {})", reference, start_pos, end_pos, start_pos, current_feature.name, feature_name, startindex, String::from_utf8_lossy(record.name()));
-            *ambiguous = true;
-            break;
-        }
-        //println!("Feature found! {}: {}:{}-{} (position: {})", map[&reference][index].name,reference, map[&reference][index].start, map[&reference][index].end, start_pos);
-    }
+    todo!("process_partial_read");
     
     feature_name
 }
