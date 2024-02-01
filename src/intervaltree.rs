@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 
 use std::collections::BTreeMap;
-use std::collections::HashMap;
 use std::collections::HashSet;
 
 use crate::Feature;
