@@ -1,26 +1,30 @@
+#![allow(dead_code)]
+
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 use crate::Feature;
 use crate::Interval;
 use crate::Node;
 
 pub struct IntervalTree {
-    all_intervals: Vec<Interval>,
-    top_node: Option<Box<Node>>,
-    boundary_table: HashMap<i32,i32>
+    pub all_intervals: HashSet<Interval>,
+    pub top_node: Option<Box<Node>>,
+    pub boundary_table: HashMap<i32,i32>
 }
 
 impl IntervalTree {
     pub fn new(intervals: Option<Vec<Interval>>) -> Self {
         if let Some(intervals) = intervals {
-            
+            eprintln!("creating IntervalTree");
             // get unique intervals
-            let mut unique_intervals: Vec<Interval> = Vec::new();
+            let mut unique_intervals: HashSet<Interval> = HashSet::new();
             for interval in intervals {
-                if !unique_intervals.contains(&interval) {
-                    unique_intervals.push(interval);
-                }
+                unique_intervals.insert(interval);
             }
+            // convert to vector
+            //let unique_intervals: Vec<Interval> = unique_intervals.into_iter().collect();
+            eprintln!("filtered intervals");
             // check if intervals are not null
             for interval in &unique_intervals {
                 if interval.is_null() {
@@ -32,27 +36,31 @@ impl IntervalTree {
                 top_node: Node::from_intervals(unique_intervals.clone()),
                 boundary_table: HashMap::new(),
             };
+            eprintln!("created top node");
 
             for interval in &unique_intervals {
                 it.add_boundaries(interval);
             }
+            eprintln!("added boundaries");
             return it;
         }
         else {
             IntervalTree {
-                all_intervals: Vec::new(),
+                all_intervals: HashSet::new(),
                 top_node: None,
                 boundary_table: HashMap::new(),
             }
         }
     }
 
-    pub fn from_tuples(tuples: Vec<(i32,i32, Option<Feature>)>) -> Self {
+    pub fn from_tuples(tuples: Vec<(i32,i32, Option<Feature>)>) -> IntervalTree {
         let mut intervals: Vec<Interval> = Vec::new();
+        eprintln!("creating intervals");
         for tuple in tuples {
             let interval = Interval::new(tuple.0, tuple.1, tuple.2);
             intervals.push(interval);
         }
+        eprintln!("created intervals");
         IntervalTree::new(Some(intervals))
     }
 
@@ -89,12 +97,14 @@ impl IntervalTree {
             return;
         }
         
-        self.all_intervals.push(interval.clone());
+        self.all_intervals.insert(interval.clone());
         self.add_boundaries(&interval);
         if let Some(top_node) = &mut self.top_node {
             top_node.add(interval);
         } else {
-            self.top_node = Node::from_intervals(vec![interval]);
+            let mut intervals: HashSet<Interval> = HashSet::new();
+            intervals.insert(interval.clone());
+            self.top_node = Node::from_intervals(intervals);
         }
     }
 
@@ -103,7 +113,7 @@ impl IntervalTree {
         self.add(interval);
     }
 
-    pub fn update(&mut self, intervals: Vec<Interval>) {
+    pub fn update(&mut self, intervals: HashSet<Interval>) {
         for interval in intervals {
             self.add(interval);
         }
