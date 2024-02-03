@@ -16,7 +16,7 @@ pub struct IntervalTree {
 impl IntervalTree {
     pub fn new(intervals: Option<Vec<Interval>>) -> Self {
         if let Some(intervals) = intervals {
-            eprintln!("creating IntervalTree");
+            //eprintln!("creating IntervalTree");
             // get unique intervals
             let mut unique_intervals: HashSet<Interval> = HashSet::new();
             for interval in intervals {
@@ -24,7 +24,7 @@ impl IntervalTree {
             }
             // convert to vector
             //let unique_intervals: Vec<Interval> = unique_intervals.into_iter().collect();
-            eprintln!("filtered intervals");
+            //eprintln!("filtered intervals");
             // check if intervals are not null
             for interval in &unique_intervals {
                 if interval.is_null() {
@@ -36,12 +36,12 @@ impl IntervalTree {
                 top_node: Node::from_intervals(unique_intervals.clone()),
                 boundary_table: BTreeMap::new(),
             };
-            eprintln!("created top node");
+            //eprintln!("created top node");
 
             for interval in &unique_intervals {
                 it.add_boundaries(interval);
             }
-            eprintln!("added boundaries");
+            //eprintln!("added boundaries");
             return it;
         }
         else {
@@ -283,29 +283,17 @@ impl IntervalTree {
         false
     }
 
-    pub fn overlap(&self, start: i32, end: i32) -> HashSet<Interval> {
+    pub fn overlap(&self, start: i32, end: i32) -> HashSet<&Interval> {
         // return a vector of all intervals that overlap with the given range
         if self.is_empty() || start >= end {
             return HashSet::new();
         }
-        let root = self.top_node.clone().unwrap();
+        let root = self.top_node.as_ref().unwrap();
         let mut result = root.search_point(start);
-        let boundary_table = &self.boundary_table;
-        let bound_begin = bisect_left(&boundary_table.keys().cloned().collect::<Vec<i32>>(), start);
-        let bound_end = bisect_left(&boundary_table.keys().cloned().collect::<Vec<i32>>(), end);
-        let overlapping_bounds = boundary_table.keys().skip(bound_begin).take(bound_end - bound_begin).collect::<Vec<&i32>>();
-        // make Vec<&i32> into Vec<i32>
-        let overlapping_bounds = overlapping_bounds.iter().map(|&x| *x).collect::<Vec<i32>>();
-        result.extend(root.search_overlap(overlapping_bounds));
+        for (&key, _) in self.boundary_table.range(start..end) {
+            result.extend(root.search_point(key));
+        }
         result
-
     }
 
-}
-
-fn bisect_left<T: Ord>(arr: &[T], value: T) -> usize {
-    match arr.binary_search(&value) {
-        Ok(index) => index,
-        Err(index) => index,
-    }   
 }
