@@ -207,7 +207,7 @@ impl Node {
         Ok(self)
     }
 
-    pub fn search_overlap(&self, point_list: Vec<i32>) -> HashSet<Interval> {
+    pub fn search_overlap(&self, point_list: Vec<i32>) -> HashSet<&Interval> {
         let mut result = HashSet::new();
         for point in point_list {
             result.extend(self.search_point(point));
@@ -215,11 +215,11 @@ impl Node {
         result
     }
 
-    pub fn search_point(&self, point: i32) -> HashSet<Interval> {
+    pub fn search_point(&self, point: i32) -> HashSet<&Interval> {
         let mut result = HashSet::new();
         for interval in &self.s_center {
             if interval.contains_point(point) {
-                result.insert(interval.clone());
+                result.insert(interval);
             }
         }
         if point < self.x_center {
