@@ -37,7 +37,9 @@ fn main() {
     // Read the gtf file
     let gtf = read_gtf(&args.gtf, args.t.as_str());
 
-    eprintln!("{:?}",gtf["1"].overlap(24646121, 24646123));
+    // for overlap in gtf["1"].overlap(169680637, 169680637+25) {
+    //     eprintln!("overlap: {:?}", overlap);
+    // }
    
     if args.export_feature_map.is_some() {
         let mut file = File::create(args.export_feature_map.clone().unwrap()).expect("Unable to create file");
@@ -47,8 +49,8 @@ fn main() {
         }
     }
 
-    // exit(1) to prevent the rest of the program from running
-    std::process::exit(1);
+    // exit(1) to prevent the rest of the program from running for debugging purposes
+    // std::process::exit(1);
 
     let mut counts = prepare_count_hashmap(&gtf);
 
@@ -240,6 +242,8 @@ fn read_gtf(file_path: &str, feature_type_filter: &str) -> HashMap<String, Inter
     // eprintln!("tree: center: {}, depth: {}, balance: {}", top_node.x_center, top_node.depth, top_node.balance);
     // eprintln!("Boundary table: {:?}", tree.boundary_table);
 
+    eprintln!("{} GFF lines processed.", counter);
+    eprint!("Creating IntervalTree for each chromosome...");
     let mut result: HashMap<String, IntervalTree> = HashMap::new();
 
     for (chr, intervals) in map {
@@ -247,8 +251,7 @@ fn read_gtf(file_path: &str, feature_type_filter: &str) -> HashMap<String, Inter
         result.insert(chr, tree);
         
     }
-
-    eprintln!("{} GFF lines processed.", counter);
+    eprintln!("done.");
     
     result
 }
@@ -346,40 +349,34 @@ fn write_counts(counts: HashMap<String, i32>, args: Args, counter: i32) {
 }
 
 
-fn count_reads(bam: BamReader<File>, counter: &mut i32, counts: &mut HashMap<String, i32>, args: &Args, reference_names: Vec<String>, gtf_end_sorted: HashMap<String, IntervalTree>) {
+fn count_reads(bam: BamReader<File>, counter: &mut i32, counts: &mut HashMap<String, i32>, args: &Args, reference_names: Vec<String>, gtf: HashMap<String, IntervalTree>) {
     for record in bam {
+        //eprintln!("{} records processed.", counter);
         *counter += 1;
         if *counter % 100000 == 0 {
             //println!("{} records processed.", counter);
             eprintln!("{} records processed.", counter);
         }
         let record = record.unwrap();
-        if String::from_utf8_lossy(record.name())=="SRR001432.281211 USI-EAS21_0008_3445:8:7:657:535 length=25" {
-            //println!("{}: {}-{}", String::from_utf8_lossy(record.name()), record.start(), record.calculate_end());
-            eprintln!("this one");
-        }
+        // if String::from_utf8_lossy(record.name())=="SRR001432.281211 USI-EAS21_0008_3445:8:7:657:535 length=25" {
+        //     //println!("{}: {}-{}", String::from_utf8_lossy(record.name()), record.start(), record.calculate_end());
+        //     eprintln!("this one");
+        // }
         if should_skip_record(&record, counts, args) {
             continue;
         }
         // todo
-        unimplemented!("todo");
+        //unimplemented!("todo");
         
         let ref_id = record.ref_id();
 
         let reference = &reference_names[ref_id as usize];
-        if gtf_end_sorted.contains_key(reference) {
-            let start_pos: u32 = record.start().try_into().unwrap();
-            let end_pos: u32 = record.calculate_end().try_into().unwrap();
-            let features = &gtf_end_sorted[reference];
+        if gtf.contains_key(reference) {
+            let start_pos = record.start().try_into().unwrap();
+            let end_pos = record.calculate_end().try_into().unwrap();
+            let features = &gtf[reference];
 
             let mut ambiguous = false;
-
-            //if String::from_utf8_lossy(record.name())=="SRR001432.153301 USI-EAS21_0008_3445:8:4:393:300 length=25" {
-                //println!("{}: {}-{}", String::from_utf8_lossy(record.name()), record.start(), record.calculate_end());
-                //eprintln!("startindex: {}, endindex: {}", startindex, endindex);
-                //eprintln!("feature: {:?}", features.0[startindex]);
-                //std::process::exit(1);
-            //}
             
             // case 1: read is fully within feature -> count feature
             //   RRR
@@ -405,82 +402,45 @@ fn count_reads(bam: BamReader<File>, counter: &mut i32, counts: &mut HashMap<Str
             
             // if cigar has length 1 and is a match, we can use the start and end positions of the read
             let cigar = record.cigar();
-            let mut feature_name = String::default();
+            let mut feature_name ;
             if cigar.len() == 1 && cigar.iter().next().unwrap().1 == Operation::AlnMatch {
                 
                 //eprintln!("startindex: {}, endindex: {}", startindex, endindex);
-                feature_name = process_partial_read(features, start_pos, end_pos, &mut ambiguous);
-            } else if cigar.len()>1 {
+                feature_name = process_partial_read(&features, start_pos, end_pos, &mut ambiguous);
+            } else {
+                //todo!("cigar length > 1");
                 feature_name= String::default();
                 // construct partial reads for each cigar element with AlnMatch
                 // keep track of feature_names for each partial read, if they are all the same, we can count the feature
-                let mut partial_reads: Vec<(u32, u32)> = Vec::new();
-                let mut partial_read_feature_names: Vec<String> = Vec::new();
-
                 let mut start_pos = start_pos;
+                                
+                // if cigar has length > 1, we need to check each cigar element
                 for cig in cigar.iter() {
                     if cig.1 != Operation::AlnMatch {
                         // Skip all cigar elements that are not matches, but add the length to the start position
-                        start_pos += cig.0;
+                        start_pos += cig.0 as i32;
                         continue;
                     }
-                    let partial_end_pos = start_pos + cig.0;
-                    partial_reads.push((start_pos, partial_end_pos));
+                    let partial_end_pos = start_pos + cig.0 as i32;
+                    
                     let temp_feature_name = process_partial_read(features,  start_pos, partial_end_pos, &mut ambiguous);
                     // if ambiguous flag is set, we can stop here, otherwise we can add the feature name to the list
                     if ambiguous {
                         break;
-                    } else {
-                        partial_read_feature_names.push(temp_feature_name);
-                    }
-                    start_pos += cig.0;
-                }
-                // now check if all feature names are the same
-                if !ambiguous {
-                    let first_feature_name = &partial_read_feature_names[0];
-                    if partial_read_feature_names.iter().all(|f| f == first_feature_name) {
-                        feature_name = first_feature_name.clone();
-                    } else {
+                    } else if feature_name != String::default() && feature_name != temp_feature_name {
                         ambiguous = true;
+                        break;
+                    } 
+                    else {
+                        feature_name = temp_feature_name;
                     }
+                    start_pos = partial_end_pos;
                 }
-                
-                // if cigar has length > 1, we need to check each cigar element
-                // for cig in cigar.iter() {
-                //     if cig.1 != Operation::AlnMatch {
-                //         // Skip all cigar elements that are not matches, but add the length to the start position
-                //         start_pos += cig.0;
-                //         continue;
-                //     }
-                //     let partial_end_pos = start_pos + cig.0;
-                //     if startindex < features.0.len()
-                //         && current_feature.start <= partial_end_pos
-                //         && current_feature.end >= start_pos
-                //     {
-                //         let feature_name = &current_feature.name;
-                //         while startindex < features.0.len() {
-                //             current_feature = &gtf_end_sorted[reference].0[startindex];
-                //             if current_feature.start > partial_end_pos {
-                //                 break;
-                //             }
-                //             // check if same feature name, otherwise ambiguous
-                //             if feature_name != &current_feature.name {
-                //                 //println!("Ambiguous feature found! {}: {}:{}-{} (position: {}); (alternate: {}) (index: {})", map[&reference][index].name,reference, map[&reference][index].start, map[&reference][index].end, start_pos, feature_name, index);
-                //                 ambiguous = true;
-                //                 break;
-                //             }
-                //             //println!("Feature found! {}: {}:{}-{} (position: {})", map[&reference][index].name,reference, map[&reference][index].start, map[&reference][index].end, start_pos);
-                //             feature_count = 1;
-                //             startindex += 1;
-                //         }
-                //     }
-                //     start_pos += cig.0;
-                // }
             }
 
             if ambiguous {
                 *counts.entry("__ambiguous".to_string()).or_insert(0) += 1;
-            } else if feature_name == String::default() {
+            } else if *feature_name == String::default() {
                 *counts.entry("__no_feature".to_string()).or_insert(0) += 1;
             } else {
                 *counts.entry(feature_name.clone()).or_insert(0) += 1;
@@ -494,46 +454,20 @@ fn count_reads(bam: BamReader<File>, counter: &mut i32, counts: &mut HashMap<Str
     }
 }
 
-fn process_partial_read(features: &IntervalTree, start_pos: u32, end_pos: u32, ambiguous: &mut bool) -> String {
+fn process_partial_read(features: &IntervalTree, start_pos: i32, end_pos: i32, ambiguous: &mut bool) -> String {
     let mut feature_name = String::default();
-    todo!("process_partial_read");
+
+    let overlapping_features = features.overlap(start_pos-1, end_pos);
+
+    if overlapping_features.len() == 0 {
+        return feature_name;
+    } else if overlapping_features.len() == 1 {
+        feature_name = overlapping_features.iter().next().unwrap().data.as_ref().unwrap().name.clone();
+    } else {
+        *ambiguous = true;
+    }
+
+    //todo!("process_partial_read");
     
     feature_name
-}
-
-fn get_end_index(features: &[Feature], _start_pos: u32, end_pos: u32) -> usize{
-    // find index of the first feature that starts after the read end
-    let endindex = match features.binary_search_by(|f| {
-        if f.start > end_pos {
-            std::cmp::Ordering::Greater
-        } else {
-            std::cmp::Ordering::Less
-        }
-    }) {
-        Ok(index) | Err(index) => {
-            //eprintln!("f.start>end_pos: {}, f.start: {}, end_pos: {}, index: {}, {}, feature:{:?}", features.len(), features[index].start, end_pos, index, features[index].start > end_pos, features[index]);
-            index + 1      
-        }
-    };
-    endindex
-}
-
-fn get_start_index(features: &Vec<Feature>, start_pos: u32, _end_pos: u32) -> usize {
-    let startindex = match features.binary_search_by(|f| {
-        if f.end < start_pos {
-            std::cmp::Ordering::Less
-        } else {
-            std::cmp::Ordering::Greater
-        }
-    }) {
-        Ok(index) | Err(index) => {
-            //eprintln!("f.end<start_pos: {}, f.end: {}, start_pos: {}, index: {}, {}, feature:{:?}", features.len(), features[index-1].end, start_pos, index, features[index-1].end < start_pos, features[index-1]);
-            if index > 0 {
-                index - 1
-            } else {
-                index
-            }
-        }
-    };
-    features[startindex].end_sorted_index
 }
