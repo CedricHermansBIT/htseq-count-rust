@@ -7,6 +7,8 @@ use std::io::Write;
 #[derive(Debug, Eq, PartialEq, Clone)]
 pub struct Node {
     pub x_center: i32,
+    pub max_end_left: i32,
+    pub max_end_right: i32,
     pub s_center: HashSet<Interval>,
     left_node: Option<Box<Node>>,
     right_node: Option<Box<Node>>,
@@ -18,6 +20,8 @@ impl Node {
     pub fn new(x_center: i32, s_center: HashSet<Interval>) -> Self {
         Node {
             x_center,
+            max_end_left: 0,
+            max_end_right: 0,
             s_center,
             left_node: None,
             right_node: None,
@@ -29,6 +33,8 @@ impl Node {
     pub fn new_empty() -> Self {
         Node {
             x_center: 0,
+            max_end_left: 0,
+            max_end_right: 0,
             s_center: HashSet::new(),
             left_node: None,
             right_node: None,
@@ -219,14 +225,19 @@ impl Node {
         let mut result = HashSet::new();
         for interval in &self.s_center {
             if interval.contains_point(point) {
+                // print in red
+                //eprintln!("\x1b[31mFound interval: {:?}\x1b[0m", interval);
                 result.insert(interval);
             }
         }
-        if point < self.x_center {
+        if point < self.max_end_left {
             if let Some(left_node) = &self.left_node {
+                //eprintln!("\x1b[32mx_center: {}, Going to the left, Data: {:?}", self.x_center, self.s_center);
                 result.extend(left_node.search_point(point));
             }
-        } else if point > self.x_center {
+        }
+        if point > self.x_center {
+            //eprintln!("\x1b[33mx_center: {}, Going to the right, Data: {:?}", self.x_center, self.s_center);
             if let Some(right_node) = &self.right_node {
                 result.extend(right_node.search_point(point));
             }
@@ -309,27 +320,46 @@ impl Node {
     }
 
     pub fn write_structure(&self, f: &mut File, indent: usize) -> std::fmt::Result {
+        // write as dot file connected by edges
         let newline = "\n";
         let spaces = " ".repeat(indent);
-
-        let _ = write!(f, "{}{}", self, newline);
-        if self.s_center.len() > 0 {
-            for interval in &self.s_center {
-                let _ = write!(f, "{} {}{}", spaces, interval, newline);
-            }
-        }
+        let current_data = self.s_center.iter().next().unwrap().data.as_ref().unwrap();
+        let result = format!("{}{} [label=\"{}\n{}-{}\nmel: {}, mer: {}\"]{}", spaces, self.x_center,current_data.name, current_data.start, current_data.end, self.max_end_left, self.max_end_right, newline);
+        _ = write!(f, "{}", result);
         if let Some(left_node) = &self.left_node {
-            let _ = write!(f, "{}{}{}", spaces, "Left:", newline);
-            left_node.write_structure(f, indent+1)?;
+            _ = write!(f, "{}{} -> {}{}", spaces, self.x_center, left_node.x_center, newline);
+            left_node.write_structure(f, indent)?;
         }
         if let Some(right_node) = &self.right_node {
-            let _ = write!(f, "{}{}{}", spaces, "Right:", newline);
-            right_node.write_structure(f, indent+1)?;
+            _ = write!(f, "{}{} -> {}{}", spaces, self.x_center, right_node.x_center, newline);
+            right_node.write_structure(f, indent)?;
         }
         Ok(())
     }
-}
+
+    pub fn update_max_ends(&mut self) {
+        if let Some(left_node) = &mut self.left_node {
+            left_node.update_max_ends();
+            let max_end_left_node = std::cmp::max(left_node.max_end_left, left_node.max_end_right);
+            self.max_end_left = self.s_center.iter().map(|interval| interval.end).max().unwrap_or(0).max(max_end_left_node);
+        }   
+        else {
+            self.max_end_left = self.s_center.iter().map(|interval| interval.end).max().unwrap_or(0);
+        }
+        if let Some(right_node) = &mut self.right_node {
+            right_node.update_max_ends();
+            let max_end_right_node = std::cmp::max(right_node.max_end_left, right_node.max_end_right);
+            self.max_end_right = self.s_center.iter().map(|interval| interval.end).max().unwrap_or(0).max(max_end_right_node);
+        }
+        else {
+            self.max_end_right = self.s_center.iter().map(|interval| interval.end).max().unwrap_or(0);
+        }
+    }
+
     
+    
+}
+
 // display format
 
 impl std::fmt::Display for Node {
