@@ -65,7 +65,7 @@ fn main() {
     //std::process::exit(1);
 
     let mut counts = prepare_count_hashmap(&gtf);
-    let mut read_to_feature: HashMap<Vec<u8>, String> = HashMap::new();
+    let mut read_to_feature: Vec<FeatureType> = Vec::new();
     let mut counter = 0;
 
     count_reads(bam, &mut counter, &mut counts, &args, gtf, &mut read_to_feature);
@@ -74,12 +74,10 @@ fn main() {
         eprintln!("Writing output sam file...");
         // loop through the bam file again and write the reads to the output sam file
         let bam = BamReader::from_path(args.bam.clone(), args.n).expect("Could not read bam file");
-        for record in bam {
-            let record = record.unwrap();
-            let name = record.name();
-            let feature = read_to_feature.get(name).unwrap();
-            let mut record = record.clone();
-            record.tags_mut().push_string(b"XF", feature.as_bytes());
+        for (i,record) in bam.enumerate() {
+            let mut record = record.unwrap();
+            let feature = read_to_feature[i].as_bytes();
+            record.tags_mut().push_string(b"XF", &feature);
             output_sam.as_mut().unwrap().write(&record).unwrap();
         }
 
@@ -95,6 +93,29 @@ fn main() {
     }
 }
 
+enum FeatureType {
+    Name(String),
+    __no_feature,
+    __ambiguous(String),
+    __not_aligned,
+    __too_low_aQual,
+    __alignment_not_unique,
+    none,
+}
+
+impl FeatureType {
+    fn as_bytes(&self) -> Vec<u8> {
+        match self {
+            FeatureType::Name(s) => s.as_bytes().to_vec(),
+            FeatureType::__no_feature => b"__no_feature".to_vec(),
+            FeatureType::__ambiguous(s) => format!("__ambiguous[{}]", s).as_bytes().to_vec(),
+            FeatureType::__not_aligned => b"__not_aligned".to_vec(),
+            FeatureType::__too_low_aQual => b"__too_low_aQual".to_vec(),
+            FeatureType::__alignment_not_unique => b"__alignment_not_unique".to_vec(),
+            FeatureType::none => b"".to_vec(),
+        }
+    }
+}
 
 // Use the structopt crate to parse command line arguments
 #[derive(StructOpt)]
@@ -309,34 +330,34 @@ fn should_skip_record(
     record: &bam::Record,
     counts: &mut HashMap<String, i32>,
     args: &Args,
-    read_to_feature: &mut HashMap<Vec<u8>, String>,
+    read_to_feature: &mut Vec<FeatureType>,
 ) -> bool {
     // Skip all reads that are not aligned
     if record.ref_id() < 0 {
-        read_to_feature.insert(record.name().to_owned(), "__not_aligned".to_string());
+        read_to_feature.push(FeatureType::__not_aligned);
         *counts.entry("__not_aligned".to_string()).or_insert(0) += 1;
         return true;
     }
     // Skip all reads that are secondary alignments
     if args.secondary_alignments == "ignore" && record.flag().all_bits(0x100) {
-        read_to_feature.insert(record.name().to_owned(), "".to_string());
+        read_to_feature.push(FeatureType::__not_aligned);
         return true;
     }
     // Skip all reads that are supplementary alignments
     if args.supplementary_alignments == "ignore" && record.flag().all_bits(0x800) {
-        read_to_feature.insert(record.name().to_owned(), "".to_string());
+        read_to_feature.push(FeatureType::none);
         return true;
     }
     // Skip all reads with MAPQ alignment quality lower than the given minimum value
     if record.mapq() < args.a {
-        read_to_feature.insert(record.name().to_owned(), "__too_low_aQual".to_string());
+        read_to_feature.push(FeatureType::__too_low_aQual);
         *counts.entry("__too_low_aQual".to_string()).or_insert(0) += 1;
         return true;
     }
     // Skip all reads that have an optional field "NH" with value > 1
     if let Some(TagValue::Int(i, _)) = record.tags().get(b"NH") {
         if i > 1 {
-            read_to_feature.insert(record.name().to_owned(), "__alignment_not_unique".to_string());
+            read_to_feature.push(FeatureType::__alignment_not_unique);
             *counts
                 .entry("__alignment_not_unique".to_string())
                 .or_insert(0) += 1;
@@ -404,7 +425,7 @@ fn write_counts(counts: HashMap<String, i32>, args: Args, counter: i32) {
 }
 
 
-fn count_reads(bam: BamReader<File>, counter: &mut i32, counts: &mut HashMap<String, i32>, args: &Args, gtf: Vec<Option<IntervalTree>>, read_to_feature: &mut HashMap<Vec<u8>, String>) {
+fn count_reads(bam: BamReader<File>, counter: &mut i32, counts: &mut HashMap<String, i32>, args: &Args, gtf: Vec<Option<IntervalTree>>, read_to_feature: &mut Vec<FeatureType>) {
 
     let processing_function = match args._m.as_str() {
         "intersection-strict" => process_intersection_strict_read,
@@ -507,23 +528,23 @@ fn count_reads(bam: BamReader<File>, counter: &mut i32, counts: &mut HashMap<Str
                 *counts.entry("__ambiguous".to_string()).or_insert(0) += 1;
             } else if feature.name == String::default() {
                 *counts.entry("__no_feature".to_string()).or_insert(0) += 1;
-                read_to_feature.insert(record.name().to_owned(), "__no_feature".to_string());
+                read_to_feature.push(FeatureType::__no_feature);
             } else {
                 *counts.entry(feature.name.clone()).or_insert(0) += 1;
-                read_to_feature.insert(record.name().to_owned(), feature.name.clone());
+                read_to_feature.push(FeatureType::Name(feature.name));
             }
         } else {
             // No reference found for this read
             // TODO: check if we should add this to __no_feature or we should throw an error
             *counts.entry("__no_feature".to_string()).or_insert(0) +=1;
-            read_to_feature.insert(record.name().to_owned(), "__no_feature".to_string());
+            read_to_feature.push(FeatureType::__no_feature);
         }
     }
 
     eprintln!("{} records processed.", counter);
 }
 
-fn process_union_read(features: &IntervalTree, start_pos: i32, end_pos: i32, ambiguous: &mut bool, record: &bam::Record, counts: &mut HashMap<String, i32>, read_to_feature: &mut HashMap<Vec<u8>, String>) -> Feature {
+fn process_union_read(features: &IntervalTree, start_pos: i32, end_pos: i32, ambiguous: &mut bool, record: &bam::Record, counts: &mut HashMap<String, i32>, read_to_feature: &mut Vec<FeatureType>) -> Feature {
     let mut feature = Feature::default();
 
     let overlapping_features = features.overlap(start_pos, end_pos);
@@ -541,7 +562,7 @@ fn process_union_read(features: &IntervalTree, start_pos: i32, end_pos: i32, amb
     feature
 }
 
-fn check_ambiguity_union(overlapping_features: &HashSet<&Interval>, _start_pos: i32, _end_pos: i32, feature: &mut Feature, ambiguous: &mut bool, record: &bam::Record, counts: &mut HashMap<String, i32>, read_to_feature: &mut HashMap<Vec<u8>, String>) {
+fn check_ambiguity_union(overlapping_features: &HashSet<&Interval>, _start_pos: i32, _end_pos: i32, feature: &mut Feature, ambiguous: &mut bool, record: &bam::Record, counts: &mut HashMap<String, i32>, read_to_feature: &mut Vec<FeatureType>) {
     let feature_names: HashSet<String> = overlapping_features.iter().map(|f| f.data.as_ref().unwrap().name.clone()).collect();
     match feature_names.len() {
         0 => {},
@@ -551,7 +572,7 @@ fn check_ambiguity_union(overlapping_features: &HashSet<&Interval>, _start_pos: 
             let mut feature_names: Vec<String> = feature_names.into_iter().collect();
             feature_names.sort();
             // write XF:Z:__ambiguous[feature_names] to the tags of the record and write it to the output sam file (separator: +)
-            read_to_feature.insert(record.name().to_owned(), format!("__ambiguous[{}]", feature_names.join("+")));
+            read_to_feature.push(FeatureType::__ambiguous(feature_names.join("+")));
             for feature_name in feature_names {
                 *counts.entry(feature_name).or_insert(0) += 1;
             }
@@ -614,10 +635,10 @@ fn _check_ambiguity(overlapping_features: &HashSet<&Interval>, start_pos: i32, e
     }
 }
 
-fn process_intersection_nonempty_read(features: &IntervalTree, start_pos: i32, end_pos: i32, ambiguous: &mut bool, record: &bam::Record, counts: &mut HashMap<String, i32>, read_to_feature: &mut HashMap<Vec<u8>, String>) -> Feature {
+fn process_intersection_nonempty_read(features: &IntervalTree, start_pos: i32, end_pos: i32, ambiguous: &mut bool, record: &bam::Record, counts: &mut HashMap<String, i32>, read_to_feature: &mut Vec<FeatureType>) -> Feature {
     todo!("process_partial_read for intersection-nonempty");
 }
 
-fn process_intersection_strict_read(features: &IntervalTree, start_pos: i32, end_pos: i32, ambiguous: &mut bool, record: &bam::Record, counts: &mut HashMap<String, i32>, read_to_feature: &mut HashMap<Vec<u8>, String>) -> Feature {
+fn process_intersection_strict_read(features: &IntervalTree, start_pos: i32, end_pos: i32, ambiguous: &mut bool, record: &bam::Record, counts: &mut HashMap<String, i32>, read_to_feature: &mut Vec<FeatureType>) -> Feature {
     todo!("process_partial_read for intersection-strict");
 }
