@@ -6,7 +6,16 @@ pub struct Feature {
     pub chr: String,
     pub start: u32,
     pub end: u32,
-    pub start_sorted_index: usize,
-    pub end_sorted_index: usize,
+}
 
+// default implementation for Feature
+impl Default for Feature {
+    fn default() -> Self {
+        Feature {
+            name: String::from(""),
+            chr: String::from(""),
+            start: 0,
+            end: 0
+        }
+    }
 }
