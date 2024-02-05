@@ -33,6 +33,7 @@ fn main() {
     let bam = BamReader::from_path(args.bam.clone(), args.n).expect("Could not read bam file");
     let header = bam.header().clone();
     let reference_names: Vec<String> = header.reference_names().to_owned();
+    let ref_names_to_id: HashMap<String, i32> = reference_names.iter().enumerate().map(|(i, s)| (s.clone(), i as i32)).collect();
     let mut output_sam: Option<SamWriter<BufWriter<File>>> = None;
     if args.output_sam.is_some() {
         output_sam = Some(SamWriter::from_path(args.output_sam.clone().unwrap(), header).expect("Could not create output sam file"));
@@ -40,7 +41,7 @@ fn main() {
     // bam fields: https://docs.rs/bam/0.3.0/bam/record/struct.Record.html
 
     // Read the gtf file
-    let gtf = read_gtf(&args.gtf, args.t.as_str());
+    let gtf = read_gtf(&args.gtf, args.t.as_str(), &ref_names_to_id);
 
     // let read= 21940455;
     // eprintln!("Searching for reads overlapping position {}-{}...", read, read+25);
@@ -52,10 +53,10 @@ fn main() {
     if args.export_feature_tree.is_some() {
         eprintln!("Exporting feature trees as dot files...");
         let mut file = File::create(args.export_feature_tree.clone().unwrap()).expect("Unable to create file");
-        for (chr, tree) in gtf.iter() {
+        for (chr, tree) in gtf.iter().enumerate() {
             // top node for each tree is the chromosome
-            file.write_all(format!("digraph {} {{\n", chr).as_bytes()).expect("Unable to write data");
-            let _ = tree.top_node.clone().unwrap().write_structure(&mut file, 0);
+            file.write_all(format!("digraph {} {{\n", reference_names[chr]).as_bytes()).expect("Unable to write data");
+            let _ = tree.as_ref().unwrap().top_node.clone().unwrap().write_structure(&mut file, 0);
             file.write_all("}\n".as_bytes()).expect("Unable to write data");
         }
     }
@@ -67,7 +68,7 @@ fn main() {
     let mut read_to_feature: HashMap<Vec<u8>, String> = HashMap::new();
     let mut counter = 0;
 
-    count_reads(bam, &mut counter, &mut counts, &args, reference_names, gtf, &mut read_to_feature);
+    count_reads(bam, &mut counter, &mut counts, &args, gtf, &mut read_to_feature);
 
     if args.output_sam.is_some() {
         eprintln!("Writing output sam file...");
@@ -204,11 +205,14 @@ struct Args {
     output_sam: Option<String>,
 }
 
-fn prepare_count_hashmap(gtf: &HashMap<String, IntervalTree>) -> HashMap<String, i32> {
+fn prepare_count_hashmap(gtf: &Vec<Option<IntervalTree>>) -> HashMap<String, i32> {
     let mut counts = HashMap::with_capacity(gtf.len());
     // add all features to the map
-    for features in gtf.values() {
-        for feature in features.all_intervals.iter() {
+    for tree in gtf {
+        if tree.is_none() {
+            continue;
+        }
+        for feature in tree.as_ref().unwrap().all_intervals.iter() {
             counts.entry(feature.data.as_ref().unwrap().name.clone()).or_insert(0);
         }
     }
@@ -222,51 +226,54 @@ fn prepare_count_hashmap(gtf: &HashMap<String, IntervalTree>) -> HashMap<String,
     counts
 }
 
-fn read_gtf(file_path: &str, feature_type_filter: &str) -> HashMap<String, IntervalTree> {
-    let mut map: HashMap<String, Vec<Interval>> = HashMap::new();
+fn read_gtf(file_path: &str, feature_type_filter: &str, ref_names_to_id: &HashMap<String, i32>) -> Vec<Option<IntervalTree>> {
+    let mut map: HashMap<i32, Vec<Interval>> = HashMap::new();
     let file = File::open(file_path).expect("Kan het bestand niet openen");
-    let reader = BufReader::new(file);
+    let mut reader = BufReader::new(file);
     let mut counter = 0;
-    for line in reader.lines() {
+    let mut line = String::new();
+    while reader.read_line(&mut line).unwrap() > 0 {
         counter += 1;
         if counter % 100000 == 0 {
             eprintln!("{} GFF lines processed.", counter);
         }
-        if let Ok(line) = line {
-            if line.starts_with('#') {
-                continue;
-            }
-            let fields: Vec<&str> = line.split('\t').collect();
-            let feature_name = fields[2];
-            if feature_name != feature_type_filter {
-                continue;
-            }
-            let attributes = fields[8];
-
-            let attributes: Vec<&str> = attributes.split(';').collect();
-
-            let name = attributes
-                .iter()
-                .find(|&attr| attr.contains("gene_name"))
-                .unwrap_or(&"")
-                .trim();
-
-            let name = name.replace("gene_name ", "");
-            let name = name.trim_matches('"');
-
-            let start = fields[3].parse::<u32>().unwrap_or(0);
-            let end = fields[4].parse::<u32>().unwrap_or(0);
-            let chr = fields[0].to_string();
-
-            let feature = Feature {
-                name: name.to_string(),
-                chr: chr.clone(),
-                start: min(start, end),
-                end: max(start, end)+1,
-            };
-
-            map.entry(chr).or_default().push(Interval::new((start) as i32, (end+1) as i32, Some(feature)));
+    
+        if line.starts_with('#') {
+            line.clear();
+            continue;
         }
+        let fields: Vec<&str> = line.split('\t').collect();
+        let feature_name = fields[2];
+        if feature_name != feature_type_filter {
+            line.clear();
+            continue;
+        }
+        let attributes = fields[8];
+
+        let attributes: Vec<&str> = attributes.split(';').collect();
+
+        let name = attributes
+            .iter()
+            .find(|&attr| attr.contains("gene_name"))
+            .unwrap_or(&"")
+            .trim();
+
+        let name = name.replace("gene_name ", "");
+        let name = name.trim_matches('"');
+
+        let start = fields[3].parse::<i32>().unwrap();
+        let end = fields[4].parse::<i32>().unwrap()+1;
+        let chr_id = ref_names_to_id.get(fields[0]).unwrap();
+
+        let feature = Feature {
+            name: name.to_string(),
+            chr: chr_id.clone(),
+            start: min(start, end),
+            end: max(start, end),
+        };
+
+        map.entry(*chr_id).or_default().push(Interval::new(start, end, Some(feature)));
+        line.clear();
     }
     //let node = Node::from_intervals(intervals);
     // print the center node (withouth the children)
@@ -278,16 +285,22 @@ fn read_gtf(file_path: &str, feature_type_filter: &str) -> HashMap<String, Inter
 
     eprintln!("{} GFF lines processed.", counter);
     eprint!("Creating IntervalTree for each chromosome...");
-    let mut result: HashMap<String, IntervalTree> = HashMap::new();
+    // prepopulate the map with empty trees
+    let mut result: Vec<Option<IntervalTree>> = Vec::with_capacity(ref_names_to_id.len());
+    //eprintln!("{:?} chromosomes found.", ref_names_to_id.keys());
+    for _ in 0..ref_names_to_id.len() {
+        result.push(None);
+    }
 
     for (chr, intervals) in map {
         let tree = IntervalTree::new(Some(intervals));
-        result.insert(chr, tree);
+        result[chr as usize] = Some(tree);
         
     }
     eprintln!("done.");
-    
-    result
+
+    //eprintln!("The amount of not empty trees: {}", result.iter().filter(|x| x.is_some()).count());
+    result    
 }
 
 fn should_skip_record(
@@ -389,7 +402,7 @@ fn write_counts(counts: HashMap<String, i32>, args: Args, counter: i32) {
 }
 
 
-fn count_reads(bam: BamReader<File>, counter: &mut i32, counts: &mut HashMap<String, i32>, args: &Args, reference_names: Vec<String>, gtf: HashMap<String, IntervalTree>, read_to_feature: &mut HashMap<Vec<u8>, String>) {
+fn count_reads(bam: BamReader<File>, counter: &mut i32, counts: &mut HashMap<String, i32>, args: &Args, gtf: Vec<Option<IntervalTree>>, read_to_feature: &mut HashMap<Vec<u8>, String>) {
 
     let processing_function = match args._m.as_str() {
         "intersection-strict" => process_intersection_strict_read,
@@ -416,13 +429,12 @@ fn count_reads(bam: BamReader<File>, counter: &mut i32, counts: &mut HashMap<Str
         // todo
         //unimplemented!("todo");
         
-        let ref_id = record.ref_id();
+        let ref_id = record.ref_id() as usize;
 
-        let reference = &reference_names[ref_id as usize];
-        if gtf.contains_key(reference) {
+        if gtf[ref_id].is_some() {
             let start_pos = record.start();
             let end_pos = record.calculate_end() + 1;
-            let features = &gtf[reference];
+            let features = &gtf[ref_id].as_ref().unwrap();
 
             let mut ambiguous = false;
             
@@ -505,6 +517,8 @@ fn count_reads(bam: BamReader<File>, counter: &mut i32, counts: &mut HashMap<Str
             read_to_feature.insert(record.name().to_owned(), "__no_feature".to_string());
         }
     }
+
+    eprintln!("{} records processed.", counter);
 }
 
 fn process_union_read(features: &IntervalTree, start_pos: i32, end_pos: i32, ambiguous: &mut bool, record: &bam::Record, counts: &mut HashMap<String, i32>, read_to_feature: &mut HashMap<Vec<u8>, String>) -> Feature {
