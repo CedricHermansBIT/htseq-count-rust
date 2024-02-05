@@ -30,7 +30,7 @@ impl Interval {
     }
 
     pub fn contains_point(&self, point: i32) -> bool {
-        self.start <= point && point < self.end
+        self.start <= point && point < self.end-1
     }
 
     pub fn range_matches(&self, other: &Interval) -> bool {
