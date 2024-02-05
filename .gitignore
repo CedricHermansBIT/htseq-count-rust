@@ -4,3 +4,12 @@ target
 perf.data
 htseq
 *.sam
+IGV*
+*.dot
+*.rust
+*.python
+test*
+perf*
+*.bai
+*.txt
+*.svg
