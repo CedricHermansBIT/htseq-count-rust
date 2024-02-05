@@ -1,6 +1,6 @@
 use bam::record::cigar::Operation;
 use bam::record::tags::TagValue;
-use bam::{BamReader, RecordWriter, SamWriter};
+use bam::{BamReader, RecordWriter, SamReader, SamWriter};
 use feature::Feature;
 use intervaltree::IntervalTree;
 use interval::Interval;
@@ -30,8 +30,11 @@ fn main() {
     }
 
     // Try to open the bam file, if it fails, print an error message
-    let bam = BamReader::from_path(args.bam.clone(), args.n).expect("Could not read bam file");
-    let header = bam.header().clone();
+    let reads_reader = ReadsReader::from_path(args.bam.clone(), args.n);
+    let header = reads_reader.header().clone();
+    // check if the header is valid
+    check_header_validity(&header, &args);
+
     let reference_names: Vec<String> = header.reference_names().to_owned();
     let ref_names_to_id: HashMap<String, i32> = reference_names.iter().enumerate().map(|(i, s)| (s.clone(), i as i32)).collect();
     let mut output_sam: Option<SamWriter<BufWriter<File>>> = None;
@@ -68,12 +71,12 @@ fn main() {
     let mut read_to_feature: Vec<FeatureType> = Vec::new();
     let mut counter = 0;
 
-    count_reads(bam, &mut counter, &mut counts, &args, gtf, &mut read_to_feature);
+    count_reads(reads_reader, &mut counter, &mut counts, &args, gtf, &mut read_to_feature);
 
     if args.output_sam.is_some() {
         eprintln!("Writing output sam file...");
         // loop through the bam file again and write the reads to the output sam file
-        let bam = BamReader::from_path(args.bam.clone(), args.n).expect("Could not read bam file");
+        let bam = ReadsReader::from_path(args.bam.clone(), args.n);
         for (i,record) in bam.enumerate() {
             let mut record = record.unwrap();
             let feature = read_to_feature[i].as_bytes();
@@ -93,26 +96,77 @@ fn main() {
     }
 }
 
+fn check_header_validity(header: &bam::Header, args: &Args) {
+    if header.lines().count() == 0 {
+        if args.bam.ends_with(".bam") {
+            eprintln!("The header of the bam file is empty. This is likely due to an invalid bam file.");
+        } else {
+            eprintln!("The header of the sam file is empty. This is likely due to an invalid sam file. (If you used samtools to convert a bam file to a sam file, make sure to use the -h option to include the header in the output file.)");
+        std::process::exit(1);
+        }
+    }
+}
+
+enum ReadsReader {
+    BamReader(BamReader<File>),
+    SamReader(SamReader<BufReader<File>>),
+}
+
+impl ReadsReader {
+
+    fn from_path(path: String, n: u16) -> ReadsReader {
+        if path.ends_with(".bam") {
+            let reader = BamReader::from_path(path, n);
+            ReadsReader::BamReader(reader.unwrap())
+        } else if path.ends_with(".sam") {
+            let reader = SamReader::from_path(path);
+            ReadsReader::SamReader(reader.unwrap())
+        } else {
+            panic!("File type not supported");
+        }
+    }
+
+    fn header(&self) -> &bam::Header {
+        match self {
+            ReadsReader::BamReader(reader) => reader.header(),
+            ReadsReader::SamReader(reader) => reader.header(),
+        }
+    }
+}
+
+impl Iterator for ReadsReader {
+    type Item = Result<bam::Record, std::io::Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            ReadsReader::BamReader(reader) => reader.next(),
+            ReadsReader::SamReader(reader) => reader.next(),
+        }
+    }
+}
+
+
+
 enum FeatureType {
     Name(String),
-    __no_feature,
-    __ambiguous(String),
-    __not_aligned,
-    __too_low_aQual,
-    __alignment_not_unique,
-    none,
+    NoFeature,
+    Ambiguous(String),
+    NotAligned,
+    TooLowaQual,
+    AlignmentNotUnique,
+    None,
 }
 
 impl FeatureType {
     fn as_bytes(&self) -> Vec<u8> {
         match self {
             FeatureType::Name(s) => s.as_bytes().to_vec(),
-            FeatureType::__no_feature => b"__no_feature".to_vec(),
-            FeatureType::__ambiguous(s) => format!("__ambiguous[{}]", s).as_bytes().to_vec(),
-            FeatureType::__not_aligned => b"__not_aligned".to_vec(),
-            FeatureType::__too_low_aQual => b"__too_low_aQual".to_vec(),
-            FeatureType::__alignment_not_unique => b"__alignment_not_unique".to_vec(),
-            FeatureType::none => b"".to_vec(),
+            FeatureType::NoFeature => b"__no_feature".to_vec(),
+            FeatureType::Ambiguous(s) => format!("__ambiguous[{}]", s).as_bytes().to_vec(),
+            FeatureType::NotAligned => b"__not_aligned".to_vec(),
+            FeatureType::TooLowaQual => b"__too_low_aQual".to_vec(),
+            FeatureType::AlignmentNotUnique => b"__alignment_not_unique".to_vec(),
+            FeatureType::None => b"".to_vec(),
         }
     }
 }
@@ -334,30 +388,30 @@ fn should_skip_record(
 ) -> bool {
     // Skip all reads that are not aligned
     if record.ref_id() < 0 {
-        read_to_feature.push(FeatureType::__not_aligned);
+        read_to_feature.push(FeatureType::NotAligned);
         *counts.entry("__not_aligned".to_string()).or_insert(0) += 1;
         return true;
     }
     // Skip all reads that are secondary alignments
     if args.secondary_alignments == "ignore" && record.flag().all_bits(0x100) {
-        read_to_feature.push(FeatureType::__not_aligned);
+        read_to_feature.push(FeatureType::NotAligned);
         return true;
     }
     // Skip all reads that are supplementary alignments
     if args.supplementary_alignments == "ignore" && record.flag().all_bits(0x800) {
-        read_to_feature.push(FeatureType::none);
+        read_to_feature.push(FeatureType::None);
         return true;
     }
     // Skip all reads with MAPQ alignment quality lower than the given minimum value
     if record.mapq() < args.a {
-        read_to_feature.push(FeatureType::__too_low_aQual);
+        read_to_feature.push(FeatureType::TooLowaQual);
         *counts.entry("__too_low_aQual".to_string()).or_insert(0) += 1;
         return true;
     }
     // Skip all reads that have an optional field "NH" with value > 1
     if let Some(TagValue::Int(i, _)) = record.tags().get(b"NH") {
         if i > 1 {
-            read_to_feature.push(FeatureType::__alignment_not_unique);
+            read_to_feature.push(FeatureType::AlignmentNotUnique);
             *counts
                 .entry("__alignment_not_unique".to_string())
                 .or_insert(0) += 1;
@@ -425,7 +479,7 @@ fn write_counts(counts: HashMap<String, i32>, args: Args, counter: i32) {
 }
 
 
-fn count_reads(bam: BamReader<File>, counter: &mut i32, counts: &mut HashMap<String, i32>, args: &Args, gtf: Vec<Option<IntervalTree>>, read_to_feature: &mut Vec<FeatureType>) {
+fn count_reads(bam: ReadsReader, counter: &mut i32, counts: &mut HashMap<String, i32>, args: &Args, gtf: Vec<Option<IntervalTree>>, read_to_feature: &mut Vec<FeatureType>) {
 
     let processing_function = match args._m.as_str() {
         "intersection-strict" => process_intersection_strict_read,
@@ -489,7 +543,7 @@ fn count_reads(bam: BamReader<File>, counter: &mut i32, counts: &mut HashMap<Str
             if cigar.len() == 1 && cigar.iter().next().unwrap().1 == Operation::AlnMatch {
                 
                 //eprintln!("startindex: {}, endindex: {}", startindex, endindex);
-                feature = processing_function(&features, start_pos, end_pos, &mut ambiguous, &record, counts, read_to_feature);
+                feature = processing_function(&features, start_pos, end_pos, &mut ambiguous, counts, read_to_feature);
             } else {
                 //todo!("cigar length > 1");
                 // construct partial reads for each cigar element with AlnMatch
@@ -505,13 +559,13 @@ fn count_reads(bam: BamReader<File>, counter: &mut i32, counts: &mut HashMap<Str
                     }
                     let partial_end_pos = start_pos + cig.0 as i32;
                     
-                    let temp_feature_name = processing_function(features,  start_pos, partial_end_pos, &mut ambiguous, &record, counts, read_to_feature);
+                    let temp_feature_name = processing_function(features,  start_pos, partial_end_pos, &mut ambiguous, counts, read_to_feature);
                     // if ambiguous flag is set, we can stop here, otherwise we can add the feature name to the list
                     if ambiguous {
                         break;
                     } else if feature != Feature::default() && feature.name != temp_feature_name.name {
                         check_ambiguity_union(&features.overlap(start_pos, partial_end_pos), 
-                                            start_pos, partial_end_pos, &mut feature, &mut ambiguous, &record,
+                                            start_pos, partial_end_pos, &mut feature, &mut ambiguous,
                                             counts, read_to_feature);
                         if ambiguous {
                             break;
@@ -528,7 +582,7 @@ fn count_reads(bam: BamReader<File>, counter: &mut i32, counts: &mut HashMap<Str
                 *counts.entry("__ambiguous".to_string()).or_insert(0) += 1;
             } else if feature.name == String::default() {
                 *counts.entry("__no_feature".to_string()).or_insert(0) += 1;
-                read_to_feature.push(FeatureType::__no_feature);
+                read_to_feature.push(FeatureType::NoFeature);
             } else {
                 *counts.entry(feature.name.clone()).or_insert(0) += 1;
                 read_to_feature.push(FeatureType::Name(feature.name));
@@ -537,14 +591,14 @@ fn count_reads(bam: BamReader<File>, counter: &mut i32, counts: &mut HashMap<Str
             // No reference found for this read
             // TODO: check if we should add this to __no_feature or we should throw an error
             *counts.entry("__no_feature".to_string()).or_insert(0) +=1;
-            read_to_feature.push(FeatureType::__no_feature);
+            read_to_feature.push(FeatureType::NoFeature);
         }
     }
 
     eprintln!("{} records processed.", counter);
 }
 
-fn process_union_read(features: &IntervalTree, start_pos: i32, end_pos: i32, ambiguous: &mut bool, record: &bam::Record, counts: &mut HashMap<String, i32>, read_to_feature: &mut Vec<FeatureType>) -> Feature {
+fn process_union_read(features: &IntervalTree, start_pos: i32, end_pos: i32, ambiguous: &mut bool, counts: &mut HashMap<String, i32>, read_to_feature: &mut Vec<FeatureType>) -> Feature {
     let mut feature = Feature::default();
 
     let overlapping_features = features.overlap(start_pos, end_pos);
@@ -554,7 +608,7 @@ fn process_union_read(features: &IntervalTree, start_pos: i32, end_pos: i32, amb
     } else if overlapping_features.len() == 1 {
         feature = overlapping_features.iter().next().unwrap().data.as_ref().unwrap().clone();
     } else {
-        check_ambiguity_union(&overlapping_features, start_pos, end_pos, &mut feature, ambiguous, &record, counts, read_to_feature);
+        check_ambiguity_union(&overlapping_features, start_pos, end_pos, &mut feature, ambiguous, counts, read_to_feature);
     }
 
     //todo!("process_partial_read");
@@ -562,7 +616,7 @@ fn process_union_read(features: &IntervalTree, start_pos: i32, end_pos: i32, amb
     feature
 }
 
-fn check_ambiguity_union(overlapping_features: &HashSet<&Interval>, _start_pos: i32, _end_pos: i32, feature: &mut Feature, ambiguous: &mut bool, record: &bam::Record, counts: &mut HashMap<String, i32>, read_to_feature: &mut Vec<FeatureType>) {
+fn check_ambiguity_union(overlapping_features: &HashSet<&Interval>, _start_pos: i32, _end_pos: i32, feature: &mut Feature, ambiguous: &mut bool, counts: &mut HashMap<String, i32>, read_to_feature: &mut Vec<FeatureType>) {
     let feature_names: HashSet<String> = overlapping_features.iter().map(|f| f.data.as_ref().unwrap().name.clone()).collect();
     match feature_names.len() {
         0 => {},
@@ -572,7 +626,7 @@ fn check_ambiguity_union(overlapping_features: &HashSet<&Interval>, _start_pos: 
             let mut feature_names: Vec<String> = feature_names.into_iter().collect();
             feature_names.sort();
             // write XF:Z:__ambiguous[feature_names] to the tags of the record and write it to the output sam file (separator: +)
-            read_to_feature.push(FeatureType::__ambiguous(feature_names.join("+")));
+            read_to_feature.push(FeatureType::Ambiguous(feature_names.join("+")));
             for feature_name in feature_names {
                 *counts.entry(feature_name).or_insert(0) += 1;
             }
@@ -635,10 +689,10 @@ fn _check_ambiguity(overlapping_features: &HashSet<&Interval>, start_pos: i32, e
     }
 }
 
-fn process_intersection_nonempty_read(features: &IntervalTree, start_pos: i32, end_pos: i32, ambiguous: &mut bool, record: &bam::Record, counts: &mut HashMap<String, i32>, read_to_feature: &mut Vec<FeatureType>) -> Feature {
+fn process_intersection_nonempty_read(features: &IntervalTree, start_pos: i32, end_pos: i32, ambiguous: &mut bool, counts: &mut HashMap<String, i32>, read_to_feature: &mut Vec<FeatureType>) -> Feature {
     todo!("process_partial_read for intersection-nonempty");
 }
 
-fn process_intersection_strict_read(features: &IntervalTree, start_pos: i32, end_pos: i32, ambiguous: &mut bool, record: &bam::Record, counts: &mut HashMap<String, i32>, read_to_feature: &mut Vec<FeatureType>) -> Feature {
+fn process_intersection_strict_read(features: &IntervalTree, start_pos: i32, end_pos: i32, ambiguous: &mut bool, counts: &mut HashMap<String, i32>, read_to_feature: &mut Vec<FeatureType>) -> Feature {
     todo!("process_partial_read for intersection-strict");
 }
