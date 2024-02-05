@@ -28,7 +28,7 @@ impl IntervalTree {
             // check if intervals are not null
             for interval in &unique_intervals {
                 if interval.is_null() {
-                    panic!("IntervalTree: Null Interval objects are not allowed in IntervalTree");
+                    panic!("IntervalTree: Null Interval objects are not allowed in IntervalTree: {:?}", interval);
                 }
             }
             let mut it = IntervalTree {
@@ -41,6 +41,9 @@ impl IntervalTree {
             for interval in &unique_intervals {
                 it.add_boundaries(interval);
             }
+
+            it.top_node.as_mut().unwrap().update_max_ends();
+
             //eprintln!("added boundaries");
             return it;
         }
