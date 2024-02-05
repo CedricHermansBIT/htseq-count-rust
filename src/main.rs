@@ -242,28 +242,30 @@ fn read_gtf(file_path: &str, feature_type_filter: &str, ref_names_to_id: &HashMa
             line.clear();
             continue;
         }
-        let fields: Vec<&str> = line.split('\t').collect();
-        let feature_name = fields[2];
+        let mut fields = line.split('\t');
+        let chr_id = ref_names_to_id.get(fields.next().unwrap()).unwrap();
+        //eprintln!("chr_id: {}", chr_id);
+        let feature_name = fields.nth(1).unwrap();
+        //eprintln!("feature_name: {}", feature_name);
+
+
+        let start = fields.next().unwrap().parse::<i32>().unwrap();
+        let end = fields.next().unwrap().parse::<i32>().unwrap()+1;
+
         if feature_name != feature_type_filter {
             line.clear();
             continue;
         }
-        let attributes = fields[8];
+        let attributes = fields.nth(3).unwrap();
+        //eprintln!("attributes: {}", attributes);
 
-        let attributes: Vec<&str> = attributes.split(';').collect();
-
-        let name = attributes
-            .iter()
+        let name = attributes.split(';')
             .find(|&attr| attr.contains("gene_name"))
-            .unwrap_or(&"")
-            .trim();
-
-        let name = name.replace("gene_name ", "");
-        let name = name.trim_matches('"');
-
-        let start = fields[3].parse::<i32>().unwrap();
-        let end = fields[4].parse::<i32>().unwrap()+1;
-        let chr_id = ref_names_to_id.get(fields[0]).unwrap();
+            .unwrap_or("")
+            .trim()
+            .strip_prefix("gene_name ")
+            .unwrap_or("")
+            .trim_matches('"');
 
         let feature = Feature {
             name: name.to_string(),
