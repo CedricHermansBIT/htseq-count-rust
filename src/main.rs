@@ -638,7 +638,7 @@ fn process_union_read(features: &IntervalTree, start_pos: i32, end_pos: i32, amb
     } else if overlapping_features.len() == 1 {
         feature = overlapping_features.iter().next().unwrap().data.as_ref().unwrap().clone();
     } else {
-        check_ambiguity_union(&overlapping_features, start_pos, end_pos, &mut feature, ambiguous, counts, &sender);
+        check_ambiguity_union(&overlapping_features, start_pos, end_pos, &mut feature, ambiguous, counts, sender);
     }
 
     //todo!("process_partial_read");
