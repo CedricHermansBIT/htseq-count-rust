@@ -43,21 +43,24 @@ fn main() {
     // Spawn a thread to write the output sam file
     let (sender, receiver) = mpsc::channel::<(bam::Record, FeatureType)>();
     //let mut output_sam: Option<SamWriter<BufWriter<File>>> = None;
-    // empty writer thread
-    let mut writer_thread = thread::spawn(|| {}); 
-    if args.output_sam.is_some() {
-        let output_sam = args.output_sam.clone().unwrap();
-        writer_thread = thread::spawn(move || {
-            let mut output_sam = Some(SamWriter::from_path(output_sam ,header).expect("Could not create output sam file"));
+    // by default, the writer thread does nothing and discards the input
+    let output_sam = args.output_sam.clone();
+    let writer_thread = if output_sam.is_some()  {
+        thread::spawn(move || {
+            let mut output_sam = SamWriter::from_path(output_sam.unwrap(), header).expect("Could not create output sam file");
             for (mut record, type_) in receiver {
-                //eprintln!("Writing record to output sam file...");
                 let feature = type_.as_bytes();
                 record.tags_mut().push_string(b"XF", &feature);
-                output_sam.as_mut().unwrap().write(&record).unwrap();
+                output_sam.write(&record).unwrap();
             }
-        });
-        //output_sam = Some(SamWriter::from_path(args.output_sam.clone().unwrap(), header).expect("Could not create output sam file"));
-    }
+        })
+    } else {
+        thread::spawn(move || { 
+            for _ in receiver {
+                // do nothing
+            }
+        })
+    };
     // bam fields: https://docs.rs/bam/0.3.0/bam/record/struct.Record.html
 
     // Read the gtf file
@@ -106,11 +109,9 @@ fn main() {
     //     output_sam.flush().unwrap();
     //     output_sam.finish().unwrap();
     // }
-    if args.output_sam.is_some() {
-        // wait for the writer thread to finish
-        writer_thread.join().unwrap();
-    }
 
+    writer_thread.join().unwrap();
+    
     if args.counts_output.is_some() {
         write_counts(counts, args, counter);
     } else {
@@ -433,7 +434,7 @@ fn should_skip_record(
     // Skip all reads that have an optional field "NH" with value > 1
     if let Some(TagValue::Int(i, _)) = record.tags().get(b"NH") {
         if i > 1 {
-            sender.send((record.clone(), FeatureType::AlignmentNotUnique));
+            _ = sender.send((record.clone(), FeatureType::AlignmentNotUnique));
             *counts
                 .entry("__alignment_not_unique".to_string())
                 .or_insert(0) += 1;
@@ -604,16 +605,16 @@ fn count_reads(bam: ReadsReader, counter: &mut i32, counts: &mut HashMap<String,
                 *counts.entry("__ambiguous".to_string()).or_insert(0) += 1;
             } else if feature.name == String::default() {
                 *counts.entry("__no_feature".to_string()).or_insert(0) += 1;
-                sender.send((record,FeatureType::NoFeature));
+                _ = sender.send((record,FeatureType::NoFeature));
             } else {
                 *counts.entry(feature.name.clone()).or_insert(0) += 1;
-                sender.send((record,FeatureType::Name(feature.name)));
+                _ = sender.send((record,FeatureType::Name(feature.name)));
             }
         } else {
             // No reference found for this read
             // TODO: check if we should add this to __no_feature or we should throw an error
             *counts.entry("__no_feature".to_string()).or_insert(0) +=1;
-            sender.send((record,FeatureType::NoFeature));
+            _ = sender.send((record,FeatureType::NoFeature));
         }
     }
 
@@ -648,7 +649,7 @@ fn check_ambiguity_union(overlapping_features: &HashSet<&Interval>, _start_pos: 
             let mut feature_names: Vec<String> = feature_names.into_iter().collect();
             feature_names.sort();
             // write XF:Z:__ambiguous[feature_names] to the tags of the record and write it to the output sam file (separator: +)
-            sender.send((record.clone(), FeatureType::Ambiguous(feature_names.join("+"))));
+            _ = sender.send((record.clone(), FeatureType::Ambiguous(feature_names.join("+"))));
             for feature_name in feature_names {
                 *counts.entry(feature_name).or_insert(0) += 1;
             }
