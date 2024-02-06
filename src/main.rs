@@ -710,10 +710,10 @@ fn _check_ambiguity(overlapping_features: &HashSet<&Interval>, start_pos: i32, e
     }
 }
 
-fn process_intersection_nonempty_read(features: &IntervalTree, start_pos: i32, end_pos: i32, ambiguous: &mut bool, counts: &mut HashMap<String, i32>, sender: &mpsc::Sender<(bam::Record, FeatureType)>, record: &bam::Record) -> Feature {
+fn process_intersection_nonempty_read(_features: &IntervalTree, _start_pos: i32, _end_pos: i32, _ambiguous: &mut bool, _counts: &mut HashMap<String, i32>, _sender: &mpsc::Sender<(bam::Record, FeatureType)>, _record: &bam::Record) -> Feature {
     todo!("process_partial_read for intersection-nonempty");
 }
 
-fn process_intersection_strict_read(features: &IntervalTree, start_pos: i32, end_pos: i32, ambiguous: &mut bool, counts: &mut HashMap<String, i32>, sender: &mpsc::Sender<(bam::Record, FeatureType)>, record: &bam::Record) -> Feature {
+fn process_intersection_strict_read(_features: &IntervalTree, _start_pos: i32, _end_pos: i32, _ambiguous: &mut bool, _counts: &mut HashMap<String, i32>, _sender: &mpsc::Sender<(bam::Record, FeatureType)>, _record: &bam::Record) -> Feature {
     todo!("process_partial_read for intersection-strict");
 }
