@@ -47,9 +47,9 @@ fn main() {
     // by default, the writer thread does nothing and discards the input
     let output_sam = args.output_sam.clone();
     let input_reads = args.bam.clone();
-    let writer_thread = if output_sam.is_some()  {
+    let writer_thread = if let Some(output_sam) = output_sam {
         thread::spawn(move || {
-            let mut output_sam = SamWriter::from_path(output_sam.unwrap(), header).expect("Could not create output sam file");
+            let mut output_sam = SamWriter::from_path(output_sam, header).expect("Could not create output sam file");
             let bam = ReadsReader::from_path(input_reads, args.n);
             // read the
             for (type_, record) in zip(receiver, bam) {
@@ -374,7 +374,7 @@ fn read_gtf(file_path: &str, feature_type_filter: &str, ref_names_to_id: &HashMa
 
         let feature = Feature {
             name: name.to_string(),
-            chr: chr_id.clone(),
+            chr: *chr_id,
             start: min(start, end),
             end: max(start, end),
         };
@@ -455,7 +455,7 @@ fn print_output(counts: HashMap<String, i32>, args: Args, counter: i32) {
     // Print de HashMap
     let mut sorted_keys: Vec<_> = counts.keys().collect();
     // Sort the keys case-insensitively
-    sorted_keys.sort_by(|a, b| a.cmp(&b));
+    sorted_keys.sort();
     for key in sorted_keys {
         if key.starts_with("__") {
             continue;
@@ -485,7 +485,7 @@ fn print_output(counts: HashMap<String, i32>, args: Args, counter: i32) {
 fn write_counts(counts: HashMap<String, i32>, args: Args, counter: i32) {
     let mut sorted_keys: Vec<_> = counts.keys().collect();
     // Sort the keys case-insensitively
-    sorted_keys.sort_by(|a, b| a.cmp(&b));
+    sorted_keys.sort();
     let mut file = File::create(args.counts_output.unwrap()).expect("Unable to create file");
     for key in sorted_keys {
         if key.starts_with("__") {
@@ -573,7 +573,7 @@ fn count_reads(bam: ReadsReader, counter: &mut i32, counts: &mut HashMap<String,
             if cigar.len() == 1 && cigar.iter().next().unwrap().1 == Operation::AlnMatch {
                 
                 //eprintln!("startindex: {}, endindex: {}", startindex, endindex);
-                feature = processing_function(&features, start_pos, end_pos, &mut ambiguous, counts, &sender);
+                feature = processing_function(features, start_pos, end_pos, &mut ambiguous, counts, &sender);
             } else {
                 //todo!("cigar length > 1");
                 // construct partial reads for each cigar element with AlnMatch
@@ -633,7 +633,7 @@ fn process_union_read(features: &IntervalTree, start_pos: i32, end_pos: i32, amb
 
     let overlapping_features = features.overlap(start_pos, end_pos);
 
-    if overlapping_features.len() == 0 {
+    if overlapping_features.is_empty() {
         return feature;
     } else if overlapping_features.len() == 1 {
         feature = overlapping_features.iter().next().unwrap().data.as_ref().unwrap().clone();

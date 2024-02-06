@@ -44,24 +44,21 @@ impl Interval {
     pub fn distance_to(&self, other: &Interval) -> i32 {
         if self.overlaps(other) {
             0
+        } else if self.start > other.end {
+            self.start - other.end
         } else {
-            if self.start > other.end {
-                self.start - other.end
-            } else {
-                other.start - self.end
-            }
+            other.start - self.end
         }
+        
     }
 
     pub fn distance_to_point(&self, point: i32) -> i32 {
         if self.contains_point(point) {
             0
+        } else if self.start > point {
+            self.start - point
         } else {
-            if self.start > point {
-                self.start - point
-            } else {
-                point - self.end
-            }
+            point - self.end
         }
     }
 
@@ -106,14 +103,15 @@ impl Interval {
         self.start >= other.start
     }
 
+    pub fn overlaps_with(&self, start: i32, end: i32) -> bool {
+        self.start < end && self.end-1 > start
+    }
+
 }
 
 impl PartialOrd for Interval {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        // first by start, then by end, then by data.name (alphabetically)
-        Some(self.start.cmp(&other.start)
-            .then(self.end.cmp(&other.end))
-            .then(self.data.as_ref().unwrap().name.cmp(&other.data.as_ref().unwrap().name)))
+        Some(self.cmp(other))
     }
 }
 

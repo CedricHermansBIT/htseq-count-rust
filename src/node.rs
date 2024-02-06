@@ -221,6 +221,26 @@ impl Node {
         result
     }
 
+    pub fn search_overlap_range(&self, start: i32, end: i32) -> HashSet<&Interval> {
+        let mut result = HashSet::new();
+        for interval in &self.s_center {
+            if interval.overlaps_with(start, end) {
+                result.insert(interval);
+            }
+        }
+        if start < self.max_end_left {
+            if let Some(left_node) = &self.left_node {
+                result.extend(left_node.search_overlap_range(start, end));
+            }
+        }
+        if end > self.x_center {
+            if let Some(right_node) = &self.right_node {
+                result.extend(right_node.search_overlap_range(start, end));
+            }
+        }
+        result
+    }
+
     pub fn search_point(&self, point: i32) -> HashSet<&Interval> {
         let mut result = HashSet::new();
         for interval in &self.s_center {
@@ -251,16 +271,11 @@ impl Node {
                 return true;
             }
         }
-        if point < self.x_center {
-            if let Some(left_node) = &self.left_node {
-                return left_node.contains_point(point);
-            }
-        } else if point > self.x_center {
-            if let Some(right_node) = &self.right_node {
-                return right_node.contains_point(point);
-            }
+        match point.cmp(&self.x_center) {
+            std::cmp::Ordering::Equal => false,
+            std::cmp::Ordering::Less => return self.left_node.as_ref().map_or(false, |n| n.contains_point(point)),
+            std::cmp::Ordering::Greater => return self.right_node.as_ref().map_or(false, |n| n.contains_point(point))
         }
-        false
     }
 
     pub fn all_children(&self) -> Vec<Interval> {
@@ -293,7 +308,7 @@ impl Node {
         let spaces = " ".repeat(indent);
 
         let mut result = vec![format!("{}{}", self, newline)];
-        if self.s_center.len() > 0 {
+        if !self.s_center.is_empty() {
             for interval in &self.s_center {
                 result.push(format!("{} {}{}", spaces, interval, newline));
             }
@@ -311,10 +326,10 @@ impl Node {
         let result = result.join("");
 
         if to_string {
-            return vec![result]
+            vec![result]
         } else {
             println!("{}", result);
-            return vec![]
+            vec![]
         }
 
     }

@@ -45,7 +45,7 @@ impl IntervalTree {
             it.top_node.as_mut().unwrap().update_max_ends();
 
             //eprintln!("added boundaries");
-            return it;
+            it
         }
         else {
             IntervalTree {
