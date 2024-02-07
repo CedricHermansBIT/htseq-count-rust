@@ -1,6 +1,6 @@
 use bam::record::cigar::Operation;
 use bam::record::tags::TagValue;
-use bam::{BamReader, RecordWriter, SamReader, SamWriter};
+use bam::{RecordReader,BamReader, RecordWriter, SamReader, SamWriter};
 use feature::Feature;
 use intervaltree::IntervalTree;
 use interval::Interval;
@@ -12,7 +12,6 @@ use std::iter::zip;
 use std::sync::mpsc;
 use std::thread;
 use structopt::StructOpt;
-use bam::RecordReader;
 
 mod feature;
 mod intervaltree;
@@ -515,7 +514,7 @@ fn write_counts(counts: HashMap<String, i32>, args: Args, counter: i32) {
 }
 
 
-fn count_reads(bam: &mut ReadsReader, counter: &mut i32, counts: &mut HashMap<String, i32>, args: &Args, gtf: Vec<Option<IntervalTree>>, sender: mpsc::Sender<FeatureType>) {
+fn count_reads(reads_reader: &mut ReadsReader, counter: &mut i32, counts: &mut HashMap<String, i32>, args: &Args, gtf: Vec<Option<IntervalTree>>, sender: mpsc::Sender<FeatureType>) {
 
     let processing_function = match args._m.as_str() {
         "intersection-strict" => process_intersection_strict_read,
@@ -525,7 +524,7 @@ fn count_reads(bam: &mut ReadsReader, counter: &mut i32, counts: &mut HashMap<St
     };
     let mut record = bam::Record::new();
     loop {
-        match bam.read_into(&mut record) {
+        match reads_reader.read_into(&mut record) {
             Ok(true) => {},
             Ok(false) => break,
             Err(e) => panic!("{}", e),
