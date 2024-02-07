@@ -334,20 +334,29 @@ impl Node {
 
     }
 
-    pub fn write_structure(&self, f: &mut File, indent: usize) -> std::fmt::Result {
+    pub fn write_structure(&self, f: &mut File, indent: usize, chr:String) -> std::fmt::Result {
         // write as dot file connected by edges
-        let newline = "\n";
-        let spaces = " ".repeat(indent);
+        // if indent is 0, write the header
+        if indent==0 {
+            f.write_all(format!("digraph {} {{\n", chr).as_bytes()).expect("Unable to write data");
+        }
         let current_data = self.s_center.iter().next().unwrap().data.as_ref().unwrap();
-        let result = format!("{}{} [label=\"{}\n{}-{}\nmel: {}, mer: {}\"]{}", spaces, self.x_center,current_data.name, current_data.start, current_data.end, self.max_end_left, self.max_end_right, newline);
-        _ = write!(f, "{}", result);
+        // write the node
+        _ = writeln!(f, "{} [label=\"{}\n{}-{}\nmel: {}, mer: {}\"]", self.x_center,current_data.name, current_data.start, current_data.end, self.max_end_left, self.max_end_right);
+        // write the edges if they exist
         if let Some(left_node) = &self.left_node {
-            _ = write!(f, "{}{} -> {}{}", spaces, self.x_center, left_node.x_center, newline);
-            left_node.write_structure(f, indent)?;
+            _ = writeln!(f, "{} -> {}", self.x_center, left_node.x_center);
+            // Recursively write the left node
+            left_node.write_structure(f, indent+1, chr.clone())?;
         }
         if let Some(right_node) = &self.right_node {
-            _ = write!(f, "{}{} -> {}{}", spaces, self.x_center, right_node.x_center, newline);
-            right_node.write_structure(f, indent)?;
+            _ = write!(f, "{} -> {}", self.x_center, right_node.x_center);
+            // Recursively write the right node
+            right_node.write_structure(f, indent+1, chr)?;
+        }
+        // if indent is 0, write the footer
+        if indent==0 {
+            f.write_all("}".as_bytes()).expect("Unable to write data");
         }
         Ok(())
     }

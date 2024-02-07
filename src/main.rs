@@ -83,9 +83,7 @@ fn main() {
         let mut file = File::create(args.export_feature_tree.clone().unwrap()).expect("Unable to create file");
         for (chr, tree) in gtf.iter().enumerate() {
             // top node for each tree is the chromosome
-            file.write_all(format!("digraph {} {{\n", reference_names[chr]).as_bytes()).expect("Unable to write data");
-            let _ = tree.as_ref().unwrap().top_node.clone().unwrap().write_structure(&mut file, 0);
-            file.write_all("}\n".as_bytes()).expect("Unable to write data");
+            let _ = tree.as_ref().unwrap().top_node.clone().unwrap().write_structure(&mut file, 0, reference_names[chr].clone());
         }
     }
     
