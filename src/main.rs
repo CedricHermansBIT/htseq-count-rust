@@ -63,7 +63,7 @@ fn main() {
                 // if 'XS' tag (strandedness) already exists, change the type from A (character) to Z (string) // else, do nothing
                 // we change this tag from A to Z because htseqcount does this as well
                 // TODO: check if we need to support this or not since it is extra work, for no obvious reason
-                if let Some(_) = record.tags().get(b"XS") {
+                if record.tags().get(b"XS").is_some() {
                     //get a copy from all tags
                     let tags = record.tags().clone();
                     // clear the old tags
@@ -74,7 +74,7 @@ fn main() {
                             TagValue::Char(c) => {
                                 if key == *b"XS" {
                                     // note: c = + or -, but are represented as 43 and 45 in ASCII
-                                    record.tags_mut().push_string(b"XS", &vec![c as u8]);
+                                    record.tags_mut().push_string(b"XS", &[c]);
                                 } else {
                                     record.tags_mut().push_char(&key, c);
                                 }
@@ -611,7 +611,7 @@ fn count_reads(reads_reader: &mut ReadsReader, counter: &mut i32, counts: &mut H
                 },
                 1 => {
                     // if there is only one unique feature name, we have a non-ambiguous read
-                    let feature_name = unique_feature_names.iter().next().unwrap();
+                    let feature_name = unique_feature_names.first().unwrap();
                     *counts.entry(feature_name.clone()).or_insert(0) += 1;
                     _ = sender.send(FeatureType::Name(feature_name.clone()));
                 },
@@ -647,7 +647,7 @@ fn process_union_read(features: &IntervalTree, start_pos: i32, end_pos: i32, ove
 }
 
 fn filter_ambiguity_union(
-    overlapping_features: &Vec<Feature>,
+    overlapping_features: &[Feature],
 ) -> Vec<String> {
     let unique_feature_names: HashSet<String> = overlapping_features.iter().map(|x| x.name.clone()).filter(|x| !x.is_empty()).collect();
     unique_feature_names.into_iter().collect()
