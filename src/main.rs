@@ -7,8 +7,7 @@ use interval::Interval;
 use std::cmp::{max, min};
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::io::{BufRead, BufReader, BufWriter, Write};
-use std::iter::zip;
+use std::io::{BufRead, BufReader, Write};
 use std::sync::mpsc;
 use std::thread;
 use structopt::StructOpt;
@@ -50,11 +49,16 @@ fn main() {
     let writer_thread = if let Some(output_sam) = output_sam {
         thread::spawn(move || {
             let mut output_sam = SamWriter::from_path(output_sam, header).expect("Could not create output sam file");
-            let bam = ReadsReader::from_path(input_reads, args.n);
+            let mut bam = ReadsReader::from_path(input_reads, args.n);
             // read the
-            for (type_, record) in zip(receiver, bam) {
+            let mut record= bam::Record::new();
+            for type_ in receiver {
+                record = match bam.read_into(&mut record) {
+                    Ok(true) => record,
+                    Ok(false) => break,
+                    Err(e) => panic!("{}", e),
+                };
                 let feature = type_.as_bytes();
-                let mut record = record.unwrap();
 
                 // if 'XS' tag (strandedness) already exists, change the type from A (character) to Z (string) // else, do nothing
                 // we change this tag from A to Z because htseqcount does this as well
@@ -585,79 +589,62 @@ fn count_reads(reads_reader: &mut ReadsReader, counter: &mut i32, counts: &mut H
             let end_pos = record.calculate_end() + 1;
             let features = &gtf[ref_id].as_ref().unwrap();
 
-            let mut ambiguous = false;
-            
-            // case 1: read is fully within feature -> count feature
-            //   RRR
-            //AAAAAAAAA
-            // case 2: read is partially within feature -> don't count feature
-            //       RRRRR
-            //AAAAAAAAA
-            // case 3: read overspans intron -> don't count feature
-            //  RRRRRR
-            //AAAAIIAAAA
-            // case 4: read is split over two exons (of same gene) -> count feature
-            //  RR--RR
-            //AAAAIIAAAA
-            // case 5: read is overlaps with two genes, but only one gene covers the entire read -> count feature for that gene
-            //  RRR
-            //AAAAAAA
-            //    BBBBBBB
-            // case 6: read is overlaps with two genes, but both genes cover the entire read -> ambiguous
-            //  RRR
-            //AAAAAAA
-            //BBBBBBB
-            
             
             // if cigar has length 1 and is a match, we can use the start and end positions of the read
             let cigar = record.cigar();
-            let mut feature = Feature::default();
+            let mut overlapping_features: Vec<Feature> = Vec::new();
+            //let mut ambiguous = false;
             if cigar.len() == 1 && cigar.iter().next().unwrap().1 == Operation::AlnMatch {
                 
                 //eprintln!("startindex: {}, endindex: {}", startindex, endindex);
-                feature = processing_function(features, start_pos, end_pos, &mut ambiguous, counts, &sender);
+                processing_function(features, start_pos, end_pos, &mut overlapping_features);
+                //ambiguous = check_ambiguity_union(overlapping_features);
             } else {
-                //todo!("cigar length > 1");
-                // construct partial reads for each cigar element with AlnMatch
-                // keep track of feature_names for each partial read, if they are all the same, we can count the feature
                 let mut start_pos = start_pos;
-                                
                 // if cigar has length > 1, we need to check each cigar element
                 for cig in cigar.iter() {
                     if cig.1 != Operation::AlnMatch {
                         // Skip all cigar elements that are not matches, but add the length to the start position
-                        start_pos += cig.0 as i32;
+                        // Soft clips are not added to the start position
+                        if cig.1 != Operation::Soft {
+                            start_pos += cig.0 as i32;
+                        }
                         continue;
                     }
-                    let partial_end_pos = start_pos + cig.0 as i32;
+                    let partial_end_pos = start_pos + cig.0 as i32 +1 ;
                     
-                    let temp_feature_name = processing_function(features,  start_pos, partial_end_pos, &mut ambiguous, counts, &sender);
-                    // if ambiguous flag is set, we can stop here, otherwise we can add the feature name to the list
-                    if ambiguous {
-                        break;
-                    } else if feature != Feature::default() && feature.name != temp_feature_name.name {
-                        check_ambiguity_union(&features.overlap(start_pos, partial_end_pos), 
-                                            start_pos, partial_end_pos, &mut feature, &mut ambiguous,
-                                            counts, &sender);
-                        if ambiguous {
-                            break;
-                        }
-                    } 
-                    else {
-                        feature = temp_feature_name;
-                    }
-                    start_pos = partial_end_pos+1;
+                    processing_function(features,  start_pos, partial_end_pos, &mut overlapping_features);
+                    start_pos = partial_end_pos;
                 }
             }
 
-            if ambiguous {
-                *counts.entry("__ambiguous".to_string()).or_insert(0) += 1;
-            } else if feature.name == String::default() {
-                *counts.entry("__no_feature".to_string()).or_insert(0) += 1;
-                _ = sender.send(FeatureType::NoFeature);
-            } else {
-                *counts.entry(feature.name.clone()).or_insert(0) += 1;
-                _ = sender.send(FeatureType::Name(feature.name));
+            // get the unique feature_names from the overlapping features, also filter out the empty names
+            let mut unique_feature_names= filter_ambiguity_union(&overlapping_features);
+            
+            // match based on the amount of unique feature names
+            let feature_name_len = unique_feature_names.len();
+            match feature_name_len {
+                0 => {
+                    // if there are no unique feature names, we have no feature
+                    *counts.entry("__no_feature".to_string()).or_insert(0) += 1;
+                    _ = sender.send(FeatureType::NoFeature);
+                },
+                1 => {
+                    // if there is only one unique feature name, we have a non-ambiguous read
+                    let feature_name = unique_feature_names.iter().next().unwrap();
+                    *counts.entry(feature_name.clone()).or_insert(0) += 1;
+                    _ = sender.send(FeatureType::Name(feature_name.clone()));
+                },
+                _ => {
+                    // if there are multiple unique feature names, we have an ambiguous read
+                    *counts.entry("__ambiguous".to_string()).or_insert(0) += 1;
+                    // we also increment each feature name by 1
+                    for feature_name in unique_feature_names.clone() {
+                        *counts.entry(feature_name.clone()).or_insert(0) += 1;
+                    }
+                    unique_feature_names.sort();
+                    _ = sender.send(FeatureType::Ambiguous(unique_feature_names.join("+")));
+                }
             }
         } else {
             // No reference found for this read
@@ -670,100 +657,27 @@ fn count_reads(reads_reader: &mut ReadsReader, counter: &mut i32, counts: &mut H
     eprintln!("{} records processed.", counter);
 }
 
-fn process_union_read(features: &IntervalTree, start_pos: i32, end_pos: i32, ambiguous: &mut bool, counts: &mut HashMap<String, i32>, sender: &mpsc::Sender<FeatureType>) -> Feature {
-    let mut feature = Feature::default();
-
-    let overlapping_features = features.overlap(start_pos, end_pos);
-
-    if overlapping_features.is_empty() {
-        return feature;
-    } else if overlapping_features.len() == 1 {
-        feature = overlapping_features.iter().next().unwrap().data.as_ref().unwrap().clone();
-    } else {
-        check_ambiguity_union(&overlapping_features, start_pos, end_pos, &mut feature, ambiguous, counts, sender);
-    }
-
-    //todo!("process_partial_read");
-    
-    feature
-}
-
-fn check_ambiguity_union(overlapping_features: &HashSet<&Interval>, _start_pos: i32, _end_pos: i32, feature: &mut Feature, ambiguous: &mut bool, counts: &mut HashMap<String, i32>, sender: &mpsc::Sender<FeatureType>) {
-    let feature_names: HashSet<String> = overlapping_features.iter().map(|f| f.data.as_ref().unwrap().name.clone()).collect();
-    match feature_names.len() {
-        0 => {},
-        1 => *feature = overlapping_features.iter().next().unwrap().data.as_ref().unwrap().clone(),
-        _ => *ambiguous = {
-            //use feature_names as the ambiguous feature
-            let mut feature_names: Vec<String> = feature_names.into_iter().collect();
-            feature_names.sort();
-            // write XF:Z:__ambiguous[feature_names] to the tags of the record and write it to the output sam file (separator: +)
-            _ = sender.send(FeatureType::Ambiguous(feature_names.join("+")));
-            for feature_name in feature_names {
-                *counts.entry(feature_name).or_insert(0) += 1;
-            }
-
-            true
-        }
-
+fn process_union_read(features: &IntervalTree, start_pos: i32, end_pos: i32, overlapping_features: &mut Vec<Feature>) {
+    let new_overlap = features.overlap(start_pos, end_pos);
+    // add all overlapping features to the list
+    for overlap in new_overlap {
+        let feature = overlap.data.as_ref().unwrap();
+        overlapping_features.push(feature.clone());
     }
 }
 
+fn filter_ambiguity_union(
+    overlapping_features: &Vec<Feature>,
+) -> Vec<String> {
+    let unique_feature_names: HashSet<String> = overlapping_features.iter().map(|x| x.name.clone()).filter(|x| !x.is_empty()).collect();
+    unique_feature_names.into_iter().collect()
 
-fn _check_ambiguity(overlapping_features: &HashSet<&Interval>, start_pos: i32, end_pos: i32, feature: &mut Feature, ambiguous: &mut bool, output_sam: &mut Option<SamWriter<BufWriter<File>>>, record: &bam::Record) {
-    let mut contained_by = Vec::new();
-    for overlap in overlapping_features {
-        if overlap.start <= start_pos && overlap.end >= end_pos {
-            contained_by.push(overlap.data.as_ref().unwrap().clone());
-        }
-    }
-    
-    let feature_names: HashSet<String> = contained_by.iter().map(|f| f.name.clone()).collect();
-
-    match feature_names.len() {
-        0 => *ambiguous = {
-            // get overlapping_features names
-            let mut names = HashSet::new();
-            for overlap in overlapping_features {
-                names.insert(overlap.data.as_ref().unwrap().name.clone());
-            }
-            if names.len() == 1 {
-                *feature = overlapping_features.iter().next().unwrap().data.as_ref().unwrap().clone();
-                false
-            } else {
-            // sort alphabetically
-            let mut names: Vec<String> = names.into_iter().collect();
-            names.sort();
-            
-            // write XF:Z:__ambiguous[feature_names] to the tags of the record and write it to the output sam file (separator: +)
-            if let Some(output_sam) = output_sam {
-                let mut record = record.clone();
-                record.tags_mut().push_string(b"XF", format!("__ambiguous[{}]", names.join("+")).as_bytes());
-                output_sam.write(&record).unwrap();
-            }
-            true
-            }
-        },
-        1 => *feature = contained_by[0].clone(),
-        _ => *ambiguous = {
-            //use feature_names as the ambiguous feature
-            let mut feature_names: Vec<String> = feature_names.into_iter().collect();
-            feature_names.sort();
-            // write XF:Z:__ambiguous[feature_names] to the tags of the record and write it to the output sam file (separator: +)
-            if let Some(output_sam) = output_sam {
-                let mut record = record.clone();
-                record.tags_mut().push_string(b"XF", format!("__ambiguous[{}]", feature_names.join("+")).as_bytes());
-                output_sam.write(&record).unwrap();
-            }
-            true
-        }
-    }
 }
 
-fn process_intersection_nonempty_read(_features: &IntervalTree, _start_pos: i32, _end_pos: i32, _ambiguous: &mut bool, _counts: &mut HashMap<String, i32>, _sender: &mpsc::Sender<FeatureType>) -> Feature {
+fn process_intersection_nonempty_read(_features: &IntervalTree, _start_pos: i32, _end_pos: i32, _overlapping_features: &mut Vec<Feature>) {
     todo!("process_partial_read for intersection-nonempty");
 }
 
-fn process_intersection_strict_read(_features: &IntervalTree, _start_pos: i32, _end_pos: i32, _ambiguous: &mut bool, _counts: &mut HashMap<String, i32>, _sender: &mpsc::Sender<FeatureType>) -> Feature {
+fn process_intersection_strict_read(_features: &IntervalTree, _start_pos: i32, _end_pos: i32, _overlapping_features: &mut Vec<Feature>) {
     todo!("process_partial_read for intersection-strict");
 }
