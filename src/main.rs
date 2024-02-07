@@ -551,7 +551,6 @@ fn write_counts(counts: HashMap<String, i32>, args: Args, counter: i32) {
 
 
 fn count_reads(reads_reader: &mut ReadsReader, counter: &mut i32, counts: &mut HashMap<String, i32>, args: &Args, gtf: Vec<Option<IntervalTree>>, sender: mpsc::Sender<FeatureType>) {
-
     let processing_function = match args._m.as_str() {
         "intersection-strict" => process_intersection_strict_read,
         "intersection-nonempty" => process_intersection_nonempty_read,
@@ -572,50 +571,31 @@ fn count_reads(reads_reader: &mut ReadsReader, counter: &mut i32, counts: &mut H
             //println!("{} records processed.", counter);
             eprintln!("{} records processed.", counter);
         }
-        // if String::from_utf8_lossy(record.name())=="SRR001432.281211 USI-EAS21_0008_3445:8:7:657:535 length=25" {
-        //     //println!("{}: {}-{}", String::from_utf8_lossy(record.name()), record.start(), record.calculate_end());
-        //     eprintln!("this one");
-        // }
         if should_skip_record(&record, counts, args, &sender) {
             continue;
         }
-        // todo
-        //unimplemented!("todo");
         
         let ref_id = record.ref_id() as usize;
 
         if gtf[ref_id].is_some() {
-            let start_pos = record.start();
-            let end_pos = record.calculate_end() + 1;
+            let mut start_pos = record.start();
+            //let end_pos = record.calculate_end() + 1;
             let features = &gtf[ref_id].as_ref().unwrap();
-
-            
-            // if cigar has length 1 and is a match, we can use the start and end positions of the read
             let cigar = record.cigar();
             let mut overlapping_features: Vec<Feature> = Vec::new();
-            //let mut ambiguous = false;
-            if cigar.len() == 1 && cigar.iter().next().unwrap().1 == Operation::AlnMatch {
-                
-                //eprintln!("startindex: {}, endindex: {}", startindex, endindex);
-                processing_function(features, start_pos, end_pos, &mut overlapping_features);
-                //ambiguous = check_ambiguity_union(overlapping_features);
-            } else {
-                let mut start_pos = start_pos;
-                // if cigar has length > 1, we need to check each cigar element
-                for cig in cigar.iter() {
-                    if cig.1 != Operation::AlnMatch {
-                        // Skip all cigar elements that are not matches, but add the length to the start position
-                        // Soft clips are not added to the start position
-                        if cig.1 != Operation::Soft {
-                            start_pos += cig.0 as i32;
-                        }
-                        continue;
+            for cig in cigar.iter() {
+                if cig.1 != Operation::AlnMatch {
+                    // Skip all cigar elements that are not matches, but add the length to the start position
+                    // Soft clips are not added to the start position
+                    if cig.1 != Operation::Soft {
+                        start_pos += cig.0 as i32;
                     }
-                    let partial_end_pos = start_pos + cig.0 as i32 +1 ;
-                    
-                    processing_function(features,  start_pos, partial_end_pos, &mut overlapping_features);
-                    start_pos = partial_end_pos;
+                    continue;
                 }
+                let partial_end_pos = start_pos + cig.0 as i32 +1 ;
+                
+                processing_function(features,  start_pos, partial_end_pos, &mut overlapping_features);
+                start_pos = partial_end_pos;
             }
 
             // get the unique feature_names from the overlapping features, also filter out the empty names
