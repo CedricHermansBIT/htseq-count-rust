@@ -12,6 +12,7 @@ use std::iter::zip;
 use std::sync::mpsc;
 use std::thread;
 use structopt::StructOpt;
+use bam::RecordReader;
 
 mod feature;
 mod intervaltree;
@@ -33,7 +34,7 @@ fn main() {
     }
 
     // Try to open the bam file, if it fails, print an error message
-    let reads_reader = ReadsReader::from_path(args.bam.clone(), args.n);
+    let mut reads_reader = ReadsReader::from_path(args.bam.clone(), args.n);
     let header = reads_reader.header().clone();
     // check if the header is valid
     check_header_validity(&header, &args);
@@ -94,7 +95,7 @@ fn main() {
     //let mut read_to_feature: Vec<FeatureType> = Vec::new();
     let mut counter = 0;
 
-    count_reads(reads_reader, &mut counter, &mut counts, &args, gtf, sender);
+    count_reads(&mut reads_reader, &mut counter, &mut counts, &args, gtf, sender);
 
     // if args.output_sam.is_some() {
     //     eprintln!("Writing output sam file...");
@@ -158,6 +159,13 @@ impl ReadsReader {
         match self {
             ReadsReader::BamReader(reader) => reader.header(),
             ReadsReader::SamReader(reader) => reader.header(),
+        }
+    }
+
+    fn read_into(&mut self, record: &mut bam::Record) -> Result<bool, std::io::Error> {
+        match self {
+            ReadsReader::BamReader(reader) => reader.read_into(record),
+            ReadsReader::SamReader(reader) => reader.read_into(record),
         }
     }
 }
@@ -507,7 +515,7 @@ fn write_counts(counts: HashMap<String, i32>, args: Args, counter: i32) {
 }
 
 
-fn count_reads(bam: ReadsReader, counter: &mut i32, counts: &mut HashMap<String, i32>, args: &Args, gtf: Vec<Option<IntervalTree>>, sender: mpsc::Sender<FeatureType>) {
+fn count_reads(bam: &mut ReadsReader, counter: &mut i32, counts: &mut HashMap<String, i32>, args: &Args, gtf: Vec<Option<IntervalTree>>, sender: mpsc::Sender<FeatureType>) {
 
     let processing_function = match args._m.as_str() {
         "intersection-strict" => process_intersection_strict_read,
@@ -515,15 +523,20 @@ fn count_reads(bam: ReadsReader, counter: &mut i32, counts: &mut HashMap<String,
         "union" => process_union_read,
         _ => panic!("Invalid mode"),
     };
-
-    for record in bam {
+    let mut record = bam::Record::new();
+    loop {
+        match bam.read_into(&mut record) {
+            Ok(true) => {},
+            Ok(false) => break,
+            Err(e) => panic!("{}", e),
+        }
+    //for record in bam {
         //eprintln!("{} records processed.", counter);
         *counter += 1;
         if *counter % 100000 == 0 {
             //println!("{} records processed.", counter);
             eprintln!("{} records processed.", counter);
         }
-        let record = record.unwrap();
         // if String::from_utf8_lossy(record.name())=="SRR001432.281211 USI-EAS21_0008_3445:8:7:657:535 length=25" {
         //     //println!("{}: {}-{}", String::from_utf8_lossy(record.name()), record.start(), record.calculate_end());
         //     eprintln!("this one");
