@@ -55,6 +55,38 @@ fn main() {
             for (type_, record) in zip(receiver, bam) {
                 let feature = type_.as_bytes();
                 let mut record = record.unwrap();
+
+                // if 'XS' tag (strandedness) already exists, change the type from A (character) to Z (string) // else, do nothing
+                // we change this tag from A to Z because htseqcount does this as well
+                // TODO: check if we need to support this or not since it is extra work, for no obvious reason
+                if let Some(_) = record.tags().get(b"XS") {
+                    //get a copy from all tags
+                    let tags = record.tags().clone();
+                    // clear the old tags
+                    record.tags_mut().clear();
+                    // add the old tags back, but change the type of the XS tag to Z
+                    for (key, value) in tags.iter() {
+                        match value {
+                            TagValue::Char(c) => {
+                                if key == *b"XS" {
+                                    // note: c = + or -, but are represented as 43 and 45 in ASCII
+                                    record.tags_mut().push_string(b"XS", &vec![c as u8]);
+                                } else {
+                                    record.tags_mut().push_char(&key, c);
+                                }
+                            }
+                            TagValue::Int(i, _t) => record.tags_mut().push_num(&key, i as i32),
+                            TagValue::Float(f) => record.tags_mut().push_num(&key, f),
+                            TagValue::String(s, _t) => record.tags_mut().push_string(&key, s),
+                            TagValue::FloatArray(a) => record.tags_mut().push_array(&key, a.raw()),
+                            TagValue::IntArray(a) => record.tags_mut().push_array(&key, a.raw()),
+                        }
+                    }
+
+                    //eprintln!("tags: {:?}", record.tags().raw());
+                }
+                
+                // push also the feature to the XF tag
                 record.tags_mut().push_string(b"XF", &feature);
                 output_sam.write(&record).unwrap();
             }
