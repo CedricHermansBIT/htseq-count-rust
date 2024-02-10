@@ -26,11 +26,11 @@ impl IntervalTree {
             //let unique_intervals: Vec<Interval> = unique_intervals.into_iter().collect();
             //eprintln!("filtered intervals");
             // check if intervals are not null
-            for interval in &unique_intervals {
-                if interval.is_null() {
-                    panic!("IntervalTree: Null Interval objects are not allowed in IntervalTree: {:?}", interval);
-                }
-            }
+            // for interval in &unique_intervals {
+            //     if interval.is_null() {
+            //         panic!("IntervalTree: Null Interval objects are not allowed in IntervalTree: {:?}", interval);
+            //     }
+            // }
             let mut it = IntervalTree {
                 all_intervals: unique_intervals.clone(),
                 top_node: Node::from_intervals(unique_intervals.clone()),
@@ -288,12 +288,12 @@ impl IntervalTree {
 
     pub fn overlap(&self, start: i32, end: i32) -> Vec<&Interval> {
         // return a vector of all intervals that overlap with the given range
-        if self.is_empty() || start >= end {
+        if self.is_empty() || start > end {
             return Vec::new();
         }
         let root = self.top_node.as_ref().unwrap();
         let mut result = root.search_point(start);
-        for (&key, _) in self.boundary_table.range(start..end) {
+        for (&key, _) in self.boundary_table.range(start..end+1) {
             result.extend(root.search_point(key));
         }
         result

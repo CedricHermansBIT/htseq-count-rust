@@ -248,12 +248,12 @@ impl Node {
                 result.push(interval);
             }
         }
-        if point < self.max_end_left {
+        if point <= self.max_end_left {
             if let Some(left_node) = &self.left_node {
                 result.extend(left_node.search_point(point));
             }
         }
-        if point > self.x_center {
+        if point >= self.x_center {
             if let Some(right_node) = &self.right_node {
                 result.extend(right_node.search_point(point));
             }

@@ -30,7 +30,7 @@ impl Interval {
     }
 
     pub fn contains_point(&self, point: i32) -> bool {
-        self.start <= point && point < self.end-1
+        self.start <= point && point <= self.end
     }
 
     pub fn range_matches(&self, other: &Interval) -> bool {
@@ -118,10 +118,10 @@ impl PartialOrd for Interval {
 impl Ord for Interval {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         // check if both intervals are not null
-        if self.is_null() || other.is_null() {
-            // throw error
-            panic!("Cannot compare null intervals");
-        }
+        // if self.is_null() || other.is_null() {
+        //     // throw error
+        //     panic!("Cannot compare null intervals");
+        // }
 
         // first by start, then by end, then by data.name (alphabetically)
         self.start.cmp(&other.start)
