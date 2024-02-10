@@ -338,7 +338,7 @@ impl Node {
         }
         let current_data = self.s_center.iter().next().unwrap().data.as_ref().unwrap();
         // write the node
-        _ = writeln!(f, "{} [label=\"{}\n{}-{}\nmel: {}, mer: {}\"]", self.x_center,current_data.name, current_data.start, current_data.end, self.max_end_left, self.max_end_right);
+        _ = writeln!(f, "{} [label=\"{}\n{}-{}\nmel: {}, mer: {}\"]", self.x_center,current_data.name(), current_data.start(), current_data.end(), self.max_end_left, self.max_end_right);
         // write the edges if they exist
         if let Some(left_node) = &self.left_node {
             _ = writeln!(f, "{} -> {}", self.x_center, left_node.x_center);
