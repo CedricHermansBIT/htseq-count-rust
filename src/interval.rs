@@ -126,7 +126,7 @@ impl Ord for Interval {
         // first by start, then by end, then by data.name (alphabetically)
         self.start.cmp(&other.start)
             .then(self.end.cmp(&other.end))
-            .then(self.data.as_ref().unwrap().name.cmp(&other.data.as_ref().unwrap().name))
+            .then(self.data.as_ref().unwrap().name().cmp(&other.data.as_ref().unwrap().name()))
 
     }
 }
@@ -134,7 +134,7 @@ impl Ord for Interval {
 impl std::fmt::Display for Interval {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match &self.data {
-            Some(feature) => write!(f, "Interval({}, {}, {})", self.start, self.end, feature.name),
+            Some(feature) => write!(f, "Interval({}, {}, {})", self.start, self.end, feature.name()),
             None => write!(f, "Interval({}, {})", self.start, self.end),
         }
     }
