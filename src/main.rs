@@ -245,8 +245,14 @@ struct Args {
 
     // Stranded
     // TODO: implement stranded mode
-    #[structopt(long = "stranded")]
-    _stranded: bool,
+    #[structopt(
+        short = "s",
+        long = "stranded",
+        help = "Whether the data is from a strand-specific assay. Specify 'yes', 'no', or 'reverse' (default: yes). 'reverse' means 'yes' with reversed strand interpretation",
+        default_value = "yes",
+        possible_values = &["yes", "no", "reverse"]
+    )]
+    stranded: String,
 
     // Quality filter
     #[structopt(
@@ -311,6 +317,15 @@ struct Args {
     )]
     delimiter: String,
 
+    // non-unique parameter
+    #[structopt(
+        long = "nonunique",
+        default_value = "none",
+        possible_values = &["none", "all", "fraction","random"],
+        help = "Whether and how to score reads that are not uniquely aligned or ambiguously assigned to features (choices: none, all, fraction, random; default: none)"
+    )]
+    nonunique: String,
+
     // Output file
     #[structopt(
         short = "c",
@@ -335,24 +350,24 @@ struct Args {
     output_sam: Option<String>,
 }
 
-fn prepare_count_hashmap(gtf: &Vec<Option<IntervalTree>>) -> HashMap<String, i32> {
-    let mut counts = HashMap::with_capacity(gtf.len());
+fn prepare_count_hashmap(gtf: &Vec<Option<IntervalTree>>) -> HashMap<String, f32> {
+    let mut counts: HashMap<String, f32> = HashMap::with_capacity(gtf.len());
     // add all features to the map
     for tree in gtf {
         if tree.is_none() {
             continue;
         }
         for feature in tree.as_ref().unwrap().all_intervals.iter() {
-            counts.entry(feature.data.as_ref().unwrap().name.clone()).or_insert(0);
+            counts.entry(feature.data.as_ref().unwrap().name().to_string()).or_insert(0.0);
         }
     }
 
     // Add the special keys
-    counts.insert("__no_feature".to_string(), 0);
-    counts.insert("__ambiguous".to_string(), 0);
-    counts.insert("__not_aligned".to_string(), 0);
-    counts.insert("__too_low_aQual".to_string(), 0);
-    counts.insert("__alignment_not_unique".to_string(), 0);
+    counts.insert("__no_feature".to_string(), 0 as f32);
+    counts.insert("__ambiguous".to_string(), 0 as f32);
+    counts.insert("__not_aligned".to_string(), 0 as f32);
+    counts.insert("__too_low_aQual".to_string(), 0 as f32);
+    counts.insert("__alignment_not_unique".to_string(), 0 as f32);
     counts
 }
 
@@ -381,12 +396,12 @@ fn read_gtf(file_path: &str, feature_type_filter: &str, ref_names_to_id: &HashMa
 
         let start = fields.next().unwrap().parse::<i32>().unwrap();
         let end = fields.next().unwrap().parse::<i32>().unwrap();
-
+        let strand = fields.nth(1).unwrap();
         if feature_name != feature_type_filter {
             line.clear();
             continue;
         }
-        let attributes = fields.nth(3).unwrap();
+        let attributes = fields.nth(1).unwrap();
         //eprintln!("attributes: {}", attributes);
 
         let name = attributes.split(';')
@@ -397,12 +412,8 @@ fn read_gtf(file_path: &str, feature_type_filter: &str, ref_names_to_id: &HashMa
             .unwrap_or("")
             .trim_matches('"');
 
-        let feature = Feature {
-            name: name.to_string(),
-            chr: *chr_id,
-            start: min(start, end),
-            end: max(start, end),
-        };
+        let feature = Feature::new(name.to_string(), *chr_id, min(start, end), max(start, end), strand.chars().next().unwrap());
+
 
         map.entry(*chr_id).or_default().push(Interval::new(start, end, Some(feature)));
         line.clear();
@@ -437,14 +448,14 @@ fn read_gtf(file_path: &str, feature_type_filter: &str, ref_names_to_id: &HashMa
 
 fn should_skip_record(
     record: &bam::Record,
-    counts: &mut HashMap<String, i32>,
+    counts: &mut HashMap<String, f32>,
     args: &Args,
     sender: &mpsc::Sender<FeatureType>,
 ) -> bool {
     // Skip all reads that are not aligned
     if record.ref_id() < 0 {
         _ = sender.send(FeatureType::NotAligned);
-        *counts.entry("__not_aligned".to_string()).or_insert(0) += 1;
+        *counts.entry("__not_aligned".to_string()).or_insert(0.0) += 1.0;
         return true;
     }
     // Skip all reads that are secondary alignments
@@ -460,7 +471,7 @@ fn should_skip_record(
     // Skip all reads with MAPQ alignment quality lower than the given minimum value
     if record.mapq() < args.a {
         _ = sender.send( FeatureType::TooLowaQual);
-        *counts.entry("__too_low_aQual".to_string()).or_insert(0) += 1;
+        *counts.entry("__too_low_aQual".to_string()).or_insert(0.0) += 1.0;
         return true;
     }
     // Skip all reads that have an optional field "NH" with value > 1
@@ -469,14 +480,15 @@ fn should_skip_record(
             _ = sender.send( FeatureType::AlignmentNotUnique);
             *counts
                 .entry("__alignment_not_unique".to_string())
-                .or_insert(0) += 1;
+                .or_insert(0.0) += 1.0;
+            // TODO: in nonunique mode "all" we should also increment the features for each alignment (process the read anyways), but we should check what happens if the read is also ambiguous
             return true;
         }
     }
     false
 }
 
-fn print_output(counts: HashMap<String, i32>, args: Args, counter: i32) {
+fn print_output(counts: HashMap<String, f32>, args: Args, counter: i32) {
     // Print de HashMap
     let mut sorted_keys: Vec<_> = counts.keys().collect();
     // Sort the keys case-insensitively
@@ -485,7 +497,16 @@ fn print_output(counts: HashMap<String, i32>, args: Args, counter: i32) {
         if key.starts_with("__") {
             continue;
         }
-        println!("{}{}{}", key, args.delimiter, counts[key]);
+        if args.nonunique != "fraction" {
+            println!("{}{}{}", key, args.delimiter, counts[key]);
+            continue;
+        }
+        // print the fraction as a float with 1 decimal if not 0
+        if counts[key] == 0.0 {
+            println!("{}{}{}", key, args.delimiter, counts[key]);
+            continue;
+        }
+        println!("{}{}{:.1}", key, args.delimiter, counts[key]);
     }
     println!("__no_feature{}{}", args.delimiter, counts["__no_feature"]);
     println!("__ambiguous{}{}", args.delimiter, counts["__ambiguous"]);
@@ -493,11 +514,12 @@ fn print_output(counts: HashMap<String, i32>, args: Args, counter: i32) {
     println!("__not_aligned{}{}", args.delimiter, counts["__not_aligned"]);
     println!("__alignment_not_unique{}{}",args.delimiter, counts["__alignment_not_unique"]);
 
+    // TODO: check the correctness, since it might depend on nonunique mode
     if args.counts {
         println!(
             "Total number of uniquely mapped reads{}{}",
             args.delimiter,
-            counter
+            counter as f32
                 - counts["__not_aligned"]
                 - counts["__too_low_aQual"]
                 - counts["__alignment_not_unique"]
@@ -507,7 +529,7 @@ fn print_output(counts: HashMap<String, i32>, args: Args, counter: i32) {
     }
 }
 
-fn write_counts(counts: HashMap<String, i32>, args: Args, counter: i32) {
+fn write_counts(counts: HashMap<String, f32>, args: Args, counter: i32) {
     let mut sorted_keys: Vec<_> = counts.keys().collect();
     // Sort the keys case-insensitively
     sorted_keys.sort();
@@ -526,7 +548,7 @@ fn write_counts(counts: HashMap<String, i32>, args: Args, counter: i32) {
 
     if args.counts {
         file.write_all(format!("Total number of uniquely mapped reads{}{}\n",args.delimiter,
-            counter - counts["__not_aligned"] - counts["__too_low_aQual"] - counts["__alignment_not_unique"] - counts["__ambiguous"] - counts["__no_feature"])
+            counter as f32 - counts["__not_aligned"] - counts["__too_low_aQual"] - counts["__alignment_not_unique"] - counts["__ambiguous"] - counts["__no_feature"])
             .as_bytes(),
         )
         .expect("Unable to write data");
@@ -534,7 +556,7 @@ fn write_counts(counts: HashMap<String, i32>, args: Args, counter: i32) {
 }
 
 
-fn count_reads(reads_reader: &mut ReadsReader, counter: &mut i32, counts: &mut HashMap<String, i32>, args: &Args, gtf: Vec<Option<IntervalTree>>, sender: mpsc::Sender<FeatureType>) {
+fn count_reads(reads_reader: &mut ReadsReader, counter: &mut i32, counts: &mut HashMap<String, f32>, args: &Args, gtf: Vec<Option<IntervalTree>>, sender: mpsc::Sender<FeatureType>) {
     let processing_function = match args._m.as_str() {
         "intersection-strict" => process_intersection_strict_read,
         "intersection-nonempty" => process_intersection_nonempty_read,
@@ -589,7 +611,7 @@ fn count_reads(reads_reader: &mut ReadsReader, counter: &mut i32, counts: &mut H
                     eprintln!("start_pos: {}, end_pos: {}, cig:{:?}", start_pos, partial_end_pos, cig);
                 }
                  */
-                processing_function(features,  start_pos, partial_end_pos, &mut overlapping_features);
+                processing_function(features,  start_pos, partial_end_pos, record.flag().is_reverse_strand(), &mut overlapping_features, args);
                 /* if record.name() == "SRR5724993.43083906".to_string().as_bytes(){
                     eprintln!("overlapping_features: {:?}", overlapping_features);
                 } */
@@ -604,21 +626,40 @@ fn count_reads(reads_reader: &mut ReadsReader, counter: &mut i32, counts: &mut H
             match feature_name_len {
                 0 => {
                     // if there are no unique feature names, we have no feature
-                    *counts.entry("__no_feature".to_string()).or_insert(0) += 1;
+                    *counts.entry("__no_feature".to_string()).or_insert(0.0) += 1.0;
                     _ = sender.send(FeatureType::NoFeature);
                 },
                 1 => {
                     // if there is only one unique feature name, we have a non-ambiguous read
                     let feature_name = unique_feature_names.first().unwrap();
-                    *counts.entry(feature_name.clone()).or_insert(0) += 1;
+                    *counts.entry(feature_name.clone()).or_insert(0.0) += 1.0;
                     _ = sender.send(FeatureType::Name(feature_name.clone()));
                 },
                 _ => {
                     // if there are multiple unique feature names, we have an ambiguous read
-                    *counts.entry("__ambiguous".to_string()).or_insert(0) += 1;
-                    // we also increment each feature name by 1
-                    for feature_name in unique_feature_names.clone() {
-                        *counts.entry(feature_name.clone()).or_insert(0) += 1;
+                    *counts.entry("__ambiguous".to_string()).or_insert(0.0) += 1.0;
+                    match args.nonunique.as_str() {
+                        "all" => {
+                        // we also increment each feature name by 1
+                            for feature_name in unique_feature_names.clone() {
+                                *counts.entry(feature_name.clone()).or_insert(0.0) += 1.0;
+                            }
+                        },
+                        "fraction" => {
+                            // we increment each feature name by 1 divided by the amount of unique feature names
+                            let fractional_count = 1.0 / feature_name_len as f32;
+                            for feature_name in unique_feature_names.clone() {
+                                *counts.entry(feature_name.clone()).or_insert(0.0) += fractional_count;
+                            }
+                        },
+                        "random" => {
+                            // we increment one of the feature names by 1
+                            let random_index = rand::random::<usize>() % feature_name_len;
+                            let feature_name = unique_feature_names[random_index].clone();
+                            *counts.entry(feature_name).or_insert(0.0) += 1.0;
+                        },
+                        _ => {// do nothing
+                        },
                     }
                     unique_feature_names.sort();
                     _ = sender.send(FeatureType::Ambiguous(unique_feature_names.join("+")));
@@ -627,7 +668,7 @@ fn count_reads(reads_reader: &mut ReadsReader, counter: &mut i32, counts: &mut H
         } else {
             // No reference found for this read
             // TODO: check if we should add this to __no_feature or we should throw an error
-            *counts.entry("__no_feature".to_string()).or_insert(0) +=1;
+            *counts.entry("__no_feature".to_string()).or_insert(0.0) += 1.0;
             _ = sender.send(FeatureType::NoFeature);
         }
     }
@@ -635,27 +676,45 @@ fn count_reads(reads_reader: &mut ReadsReader, counter: &mut i32, counts: &mut H
     eprintln!("{} records processed.", counter);
 }
 
-fn process_union_read(features: &IntervalTree, start_pos: i32, end_pos: i32, overlapping_features: &mut Vec<Feature>) {
+fn process_union_read(features: &IntervalTree, start_pos: i32, end_pos: i32, is_reverse_strand: bool, overlapping_features: &mut Vec<Feature>, args: &Args) {
     let new_overlap = features.overlap(start_pos, end_pos);
+    let strand = if is_reverse_strand { '-' } else { '+' };
     // add all overlapping features to the list
     for overlap in new_overlap {
         let feature = overlap.data.as_ref().unwrap();
-        overlapping_features.push(feature.clone());
+        match args.stranded.as_str() {
+            "yes" => {
+                //eprintln!("feature: {:?}", feature);
+                if feature.strand() == strand {
+                    overlapping_features.push(feature.clone());
+                }
+            },
+            "reverse" => {
+                if feature.strand() != strand {
+                    overlapping_features.push(feature.clone());
+                }
+            },
+            "no" => {
+                overlapping_features.push(feature.clone());
+            },
+            _ => {
+                panic!("Invalid strandedness");
+            }
+        }
     }
+}
+
+fn process_intersection_nonempty_read(_features: &IntervalTree, _start_pos: i32, _end_pos: i32, _strand: bool, _overlapping_features: &mut Vec<Feature>, _args: &Args) {
+    todo!("process_partial_read for intersection-nonempty");
+}
+
+fn process_intersection_strict_read(_features: &IntervalTree, _start_pos: i32, _end_pos: i32, _strand: bool, _overlapping_features: &mut Vec<Feature>, _args: &Args) {
+    todo!("process_partial_read for intersection-strict");    
 }
 
 fn filter_ambiguity_union(
     overlapping_features: &[Feature],
 ) -> Vec<String> {
-    let unique_feature_names: HashSet<String> = overlapping_features.iter().map(|x| x.name.clone()).filter(|x| !x.is_empty()).collect();
+    let unique_feature_names: HashSet<String> = overlapping_features.iter().map(|x| x.name().to_string().clone()).filter(|x| !x.is_empty()).collect();
     unique_feature_names.into_iter().collect()
-
-}
-
-fn process_intersection_nonempty_read(_features: &IntervalTree, _start_pos: i32, _end_pos: i32, _overlapping_features: &mut Vec<Feature>) {
-    todo!("process_partial_read for intersection-nonempty");
-}
-
-fn process_intersection_strict_read(_features: &IntervalTree, _start_pos: i32, _end_pos: i32, _overlapping_features: &mut Vec<Feature>) {
-    todo!("process_partial_read for intersection-strict");
 }
