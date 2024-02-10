@@ -131,23 +131,7 @@ fn main() {
     let mut counter = 0;
 
     count_reads(&mut reads_reader, &mut counter, &mut counts, &args, gtf, sender);
-
-    // if args.output_sam.is_some() {
-    //     eprintln!("Writing output sam file...");
-    //     // loop through the bam file again and write the reads to the output sam file
-    //     let bam = ReadsReader::from_path(args.bam.clone(), args.n);
-    //     for (i,record) in bam.enumerate() {
-    //         let mut record = record.unwrap();
-    //         let feature = read_to_feature[i].as_bytes();
-    //         record.tags_mut().push_string(b"XF", &feature);
-    //         output_sam.as_mut().unwrap().write(&record).unwrap();
-    //     }
-
-
-    //     let mut output_sam = output_sam.unwrap();
-    //     output_sam.flush().unwrap();
-    //     output_sam.finish().unwrap();
-    // }
+    
     if args.output_sam.is_some() {
         eprintln!("Waiting for writer thread to finish...");
     }
@@ -396,7 +380,7 @@ fn read_gtf(file_path: &str, feature_type_filter: &str, ref_names_to_id: &HashMa
 
 
         let start = fields.next().unwrap().parse::<i32>().unwrap();
-        let end = fields.next().unwrap().parse::<i32>().unwrap()+1;
+        let end = fields.next().unwrap().parse::<i32>().unwrap();
 
         if feature_name != feature_type_filter {
             line.clear();
@@ -558,7 +542,9 @@ fn count_reads(reads_reader: &mut ReadsReader, counter: &mut i32, counts: &mut H
         _ => panic!("Invalid mode"),
     };
     let mut record = bam::Record::new();
+    let mut overlapping_features: Vec<Feature> = Vec::with_capacity(50);
     loop {
+        overlapping_features.clear();
         match reads_reader.read_into(&mut record) {
             Ok(true) => {},
             Ok(false) => break,
@@ -578,23 +564,35 @@ fn count_reads(reads_reader: &mut ReadsReader, counter: &mut i32, counts: &mut H
         let ref_id = record.ref_id() as usize;
 
         if gtf[ref_id].is_some() {
-            let mut start_pos = record.start();
+            let mut start_pos = record.start() +1;
             //let end_pos = record.calculate_end() + 1;
             let features = &gtf[ref_id].as_ref().unwrap();
             let cigar = record.cigar();
-            let mut overlapping_features: Vec<Feature> = Vec::new();
             for cig in cigar.iter() {
                 if cig.1 != Operation::AlnMatch {
                     // Skip all cigar elements that are not matches, but add the length to the start position
                     // Soft clips are not added to the start position
-                    if cig.1 != Operation::Soft {
-                        start_pos += cig.0 as i32;
+                    /* if record.name() == "SRR5724993.43083906".to_string().as_bytes(){
+
+                        eprintln!("start_pos: {}, cig:{:?}", start_pos, cig);
+                    } */
+                    match cig.1 {
+                        Operation::Soft => {},
+                        Operation::Insertion => start_pos += 1,
+                        _ => start_pos += cig.0 as i32 + 1,
                     }
                     continue;
                 }
-                let partial_end_pos = start_pos + cig.0 as i32 +1 ;
-                
+                let partial_end_pos = start_pos + cig.0 as i32 -1 ;
+                /* if record.name() == "SRR5724993.43083906".to_string().as_bytes(){
+
+                    eprintln!("start_pos: {}, end_pos: {}, cig:{:?}", start_pos, partial_end_pos, cig);
+                }
+                 */
                 processing_function(features,  start_pos, partial_end_pos, &mut overlapping_features);
+                /* if record.name() == "SRR5724993.43083906".to_string().as_bytes(){
+                    eprintln!("overlapping_features: {:?}", overlapping_features);
+                } */
                 start_pos = partial_end_pos;
             }
 
