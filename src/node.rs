@@ -241,23 +241,19 @@ impl Node {
         result
     }
 
-    pub fn search_point(&self, point: i32) -> HashSet<&Interval> {
-        let mut result = HashSet::new();
+    pub fn search_point(&self, point: i32) -> Vec<&Interval> {
+        let mut result = Vec::new();
         for interval in &self.s_center {
             if interval.contains_point(point) {
-                // print in red
-                //eprintln!("\x1b[31mFound interval: {:?}\x1b[0m", interval);
-                result.insert(interval);
+                result.push(interval);
             }
         }
         if point < self.max_end_left {
             if let Some(left_node) = &self.left_node {
-                //eprintln!("\x1b[32mx_center: {}, Going to the left, Data: {:?}", self.x_center, self.s_center);
                 result.extend(left_node.search_point(point));
             }
         }
         if point > self.x_center {
-            //eprintln!("\x1b[33mx_center: {}, Going to the right, Data: {:?}", self.x_center, self.s_center);
             if let Some(right_node) = &self.right_node {
                 result.extend(right_node.search_point(point));
             }
