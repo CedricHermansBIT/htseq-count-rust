@@ -299,4 +299,11 @@ impl IntervalTree {
         result
     }
 
+    pub fn contains(&self, start: i32, end: i32) -> Vec<&Interval> {
+        let mut result = self.overlap(start, end);
+        // TODO: merge overlapping intervals with same name into one interval
+        result.retain(|x| x.start <= start && x.end >= end);
+        result
+    }
+
 }

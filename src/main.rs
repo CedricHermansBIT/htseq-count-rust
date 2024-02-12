@@ -680,6 +680,30 @@ fn process_union_read(features: &IntervalTree, start_pos: i32, end_pos: i32, is_
     let new_overlap = features.overlap(start_pos, end_pos);
     let strand = if is_reverse_strand { '-' } else { '+' };
     // add all overlapping features to the list
+    add_stranded_features(new_overlap, strand, overlapping_features, args);
+    
+}
+
+fn process_intersection_nonempty_read(_features: &IntervalTree, _start_pos: i32, _end_pos: i32, _strand: bool, _overlapping_features: &mut Vec<Feature>, _args: &Args) {
+    todo!("process_partial_read for intersection-nonempty");
+}
+
+fn process_intersection_strict_read(features: &IntervalTree, start_pos: i32, end_pos: i32, strand: bool, overlapping_features: &mut Vec<Feature>, args: &Args) {
+    //todo!("process_partial_read for intersection-strict");
+    let new_contained = features.contains(start_pos, end_pos);
+    let strand = if strand { '-' } else { '+' };
+    // add all contained features to the list
+    add_stranded_features(new_contained, strand, overlapping_features, args);
+}
+
+fn filter_ambiguity_union(
+    overlapping_features: &[Feature],
+) -> Vec<String> {
+    let unique_feature_names: HashSet<String> = overlapping_features.iter().map(|x| x.name().to_string().clone()).filter(|x| !x.is_empty()).collect();
+    unique_feature_names.into_iter().collect()
+}
+
+fn add_stranded_features(new_overlap: Vec<&Interval>, strand: char, overlapping_features: &mut Vec<Feature>, args: &Args) {
     for overlap in new_overlap {
         let feature = overlap.data.as_ref().unwrap();
         match args.stranded.as_str() {
@@ -702,19 +726,4 @@ fn process_union_read(features: &IntervalTree, start_pos: i32, end_pos: i32, is_
             }
         }
     }
-}
-
-fn process_intersection_nonempty_read(_features: &IntervalTree, _start_pos: i32, _end_pos: i32, _strand: bool, _overlapping_features: &mut Vec<Feature>, _args: &Args) {
-    todo!("process_partial_read for intersection-nonempty");
-}
-
-fn process_intersection_strict_read(_features: &IntervalTree, _start_pos: i32, _end_pos: i32, _strand: bool, _overlapping_features: &mut Vec<Feature>, _args: &Args) {
-    todo!("process_partial_read for intersection-strict");    
-}
-
-fn filter_ambiguity_union(
-    overlapping_features: &[Feature],
-) -> Vec<String> {
-    let unique_feature_names: HashSet<String> = overlapping_features.iter().map(|x| x.name().to_string().clone()).filter(|x| !x.is_empty()).collect();
-    unique_feature_names.into_iter().collect()
 }
