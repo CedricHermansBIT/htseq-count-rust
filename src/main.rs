@@ -257,7 +257,7 @@ struct Args {
     // Quality filter
     #[structopt(
         short = "a",
-        long = "amount",
+        long = "minaqual",
         default_value = "10",
         help = "Skip all reads with MAPQ alignment quality lower than the given minimum value (default: 10). MAPQ is the 5th column of a SAM/BAM file and its usage depends on the software used to map the reads."
     )]
@@ -276,7 +276,7 @@ struct Args {
     // TODO: implement actual logic for this option
     #[structopt(
         short = "i",
-        long = "id",
+        long = "idattr",
         default_value = "gene_name",
         help = "GTF attribute to be used as feature ID (default, suitable for Ensembl GTF files: gene_id). All feature of the right type (see -t option) within the same GTF
     attribute will be added together. The typical way of using this option is to count all exonic reads from each gene and add the exons but other uses are possible
@@ -344,7 +344,7 @@ struct Args {
 
     #[structopt(
         short = "o",
-        long = "output_sam",
+        long = "samout",
         help = "Create a SAM file with the reads and their features."
     )]
     output_sam: Option<String>,
