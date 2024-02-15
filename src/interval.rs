@@ -107,6 +107,16 @@ impl Interval {
         self.start < end && self.end-1 > start
     }
 
+    // as_ref() returns a reference to the Option's value
+    pub fn name(&self) -> Option<&str> {
+        self.data.as_ref().map(|f| f.name())
+    }
+
+    pub fn set_end(&mut self, end: i32) {
+        self.end = end;
+        self.data.as_mut().map(|f| f.set_end(end));
+    }
+
 }
 
 impl PartialOrd for Interval {
@@ -139,5 +149,3 @@ impl std::fmt::Display for Interval {
         }
     }
 }
-
-

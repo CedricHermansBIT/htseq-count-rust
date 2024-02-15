@@ -22,6 +22,39 @@ impl IntervalTree {
             for interval in intervals {
                 unique_intervals.insert(interval);
             }
+
+            // merge overlapping intervals with same name
+            use std::collections::HashMap;
+
+            // Create a HashMap where the keys are the names of the intervals and the values are vectors of intervals with that name.
+            let mut grouped_intervals: HashMap<String, Vec<Interval>> = HashMap::new();
+            for interval in &unique_intervals {
+                grouped_intervals.entry(interval.name().unwrap().to_string()).or_insert(Vec::new()).push(interval.clone());
+            }
+
+            // For each name in the HashMap, sort the intervals by their start position and then merge the overlapping intervals.
+            for intervals in grouped_intervals.values_mut() {
+                intervals.sort_by(|a, b| a.start.cmp(&b.start));
+                let mut i = 0;
+                while i < intervals.len() - 1 {
+                    if intervals[i].end >= intervals[i+1].start && intervals[i+1].end >= intervals[i].end {
+                        intervals[i].end = intervals[i+1].end;
+                        intervals.remove(i+1);
+                    } else {
+                        i += 1;
+                    }
+                }
+            }
+
+            // Create a new HashSet of intervals from the merged intervals.
+            let mut unique_intervals: HashSet<Interval> = HashSet::new();
+            for intervals in grouped_intervals.values() {
+                for interval in intervals {
+                    unique_intervals.insert(interval.clone());
+                }
+            }
+
+
             // convert to vector
             //let unique_intervals: Vec<Interval> = unique_intervals.into_iter().collect();
             //eprintln!("filtered intervals");
@@ -90,6 +123,7 @@ impl IntervalTree {
             }
         }
     }
+
 
     pub fn add(&mut self, interval: Interval) {
         if interval.is_null() {
@@ -300,8 +334,7 @@ impl IntervalTree {
     }
 
     pub fn contains(&self, start: i32, end: i32) -> Vec<&Interval> {
-        let mut result = self.overlap(start, end);
-        // TODO: merge overlapping intervals with same name into one interval
+        let mut result: Vec<&Interval> = self.overlap(start, end);
         result.retain(|x| x.start <= start && x.end >= end);
         result
     }

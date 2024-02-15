@@ -244,7 +244,6 @@ struct Args {
     _m: String,
 
     // Stranded
-    // TODO: implement stranded mode
     #[structopt(
         short = "s",
         long = "stranded",
@@ -363,17 +362,17 @@ fn prepare_count_hashmap(gtf: &Vec<Option<IntervalTree>>) -> HashMap<String, f32
     }
 
     // Add the special keys
-    counts.insert("__no_feature".to_string(), 0 as f32);
-    counts.insert("__ambiguous".to_string(), 0 as f32);
-    counts.insert("__not_aligned".to_string(), 0 as f32);
-    counts.insert("__too_low_aQual".to_string(), 0 as f32);
-    counts.insert("__alignment_not_unique".to_string(), 0 as f32);
+    counts.insert("__no_feature".to_string(), 0f32);
+    counts.insert("__ambiguous".to_string(), 0f32);
+    counts.insert("__not_aligned".to_string(), 0f32);
+    counts.insert("__too_low_aQual".to_string(), 0f32);
+    counts.insert("__alignment_not_unique".to_string(), 0f32);
     counts
 }
 
 fn read_gtf(file_path: &str, feature_type_filter: &str, ref_names_to_id: &HashMap<String, i32>) -> Vec<Option<IntervalTree>> {
     let mut map: HashMap<i32, Vec<Interval>> = HashMap::new();
-    let file = File::open(file_path).expect("Kan het bestand niet openen");
+    let file = File::open(file_path).expect("Could not open this file");
     let mut reader = BufReader::new(file);
     let mut counter = 0;
     let mut line = String::new();
@@ -691,6 +690,7 @@ fn process_intersection_nonempty_read(_features: &IntervalTree, _start_pos: i32,
 fn process_intersection_strict_read(features: &IntervalTree, start_pos: i32, end_pos: i32, strand: bool, overlapping_features: &mut Vec<Feature>, args: &Args) {
     //todo!("process_partial_read for intersection-strict");
     let new_contained = features.contains(start_pos, end_pos);
+    // change new_contained to a Vec<&Interval>
     let strand = if strand { '-' } else { '+' };
     // add all contained features to the list
     add_stranded_features(new_contained, strand, overlapping_features, args);

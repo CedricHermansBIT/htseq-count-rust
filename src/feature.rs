@@ -41,4 +41,8 @@ impl Feature {
     pub fn strand(&self) -> char {
         self.strand
     }
+
+    pub fn set_end(&mut self, end: i32) {
+        self.end = end;
+    }
 }
