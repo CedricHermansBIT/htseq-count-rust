@@ -375,7 +375,7 @@ fn read_gtf(file_path: &str, feature_type_filter: &str, ref_names_to_id: &HashMa
     let file = File::open(file_path).expect("Could not open this file");
     let mut reader = BufReader::new(file);
     let mut counter = 0;
-    let mut line = String::new();
+    let mut line = String::default();
     while reader.read_line(&mut line).unwrap() > 0 {
         counter += 1;
         if counter % 100000 == 0 {

@@ -327,7 +327,7 @@ impl IntervalTree {
         }
         let root = self.top_node.as_ref().unwrap();
         let mut result = root.search_point(start);
-        for (&key, _) in self.boundary_table.range(start..end+1) {
+        for (&key, _) in self.boundary_table.range(start..=end) {
             result.extend(root.search_point(key));
         }
         result

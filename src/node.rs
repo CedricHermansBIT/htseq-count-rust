@@ -319,7 +319,7 @@ impl Node {
         }
         
         // join the vector into a string
-        let result = result.join("");
+        let result = result.concat();
 
         if to_string {
             vec![result]
