@@ -566,6 +566,14 @@ fn count_reads(reads_reader: &mut ReadsReader, counter: &mut i32, counts: &mut H
         "union" => process_union_read,
         _ => panic!("Invalid mode"),
     };
+
+    let ambiguity_function = match args._m.as_str() {
+        "intersection-strict" => filter_ambiguity_intersection,
+        "intersection-nonempty" => filter_ambiguity_intersection,
+        "union" => filter_ambiguity_union,
+        _ => panic!("Invalid mode"),
+    };
+
     let mut record = bam::Record::new();
     let mut overlapping_features: Vec<Feature> = Vec::with_capacity(50);
     loop {
@@ -609,20 +617,20 @@ fn count_reads(reads_reader: &mut ReadsReader, counter: &mut i32, counts: &mut H
                     continue;
                 }
                 let partial_end_pos = start_pos + cig.0 as i32 -1 ;
-                /* if record.name() == "SRR5724993.43083906".to_string().as_bytes(){
+                if record.name() == "SRR5724993.50152400".to_string().as_bytes(){
 
                     eprintln!("start_pos: {}, end_pos: {}, cig:{:?}", start_pos, partial_end_pos, cig);
                 }
-                 */
+                
                 processing_function(features,  start_pos, partial_end_pos, record.flag().is_reverse_strand(), &mut overlapping_features, args);
-                /* if record.name() == "SRR5724993.43083906".to_string().as_bytes(){
+                if record.name() == "SRR5724993.50152400".to_string().as_bytes(){
                     eprintln!("overlapping_features: {:?}", overlapping_features);
-                } */
+                }
                 start_pos = partial_end_pos;
             }
 
             // get the unique feature_names from the overlapping features, also filter out the empty names
-            let mut unique_feature_names= filter_ambiguity_union(&overlapping_features);
+            let mut unique_feature_names= ambiguity_function(&overlapping_features);
             
             // match based on the amount of unique feature names
             let feature_name_len = unique_feature_names.len();
@@ -693,6 +701,7 @@ fn process_intersection_nonempty_read(_features: &IntervalTree, _start_pos: i32,
 
 fn process_intersection_strict_read(features: &IntervalTree, start_pos: i32, end_pos: i32, strand: bool, overlapping_features: &mut Vec<Feature>, args: &Args) {
     //todo!("process_partial_read for intersection-strict");
+    // Problem now: if we have partial reads: each part must overlap with the same feature, if different parts overlap with different features, we should not count the read as feature but as no_feature
     let new_contained = features.contains(start_pos, end_pos);
     // change new_contained to a Vec<&Interval>
     let strand = if strand { '-' } else { '+' };
@@ -707,27 +716,47 @@ fn filter_ambiguity_union(
     unique_feature_names.into_iter().collect()
 }
 
+fn filter_ambiguity_intersection(
+    overlapping_features: &[Feature],
+) -> Vec<String> {
+    // if any of the results is empty, we have no feature, so we return an empty Vec
+    if overlapping_features.iter().any(|x| x.name().is_empty()) {
+        return Vec::new()
+    
+    // otherwise, we return the unique feature names
+    } else {
+        let unique_feature_names: HashSet<String> = overlapping_features.iter().map(|x| x.name().to_string().clone()).collect();
+        unique_feature_names.into_iter().collect()
+    }
+
+}
+
 fn add_stranded_features(new_overlap: Vec<&Interval>, strand: char, overlapping_features: &mut Vec<Feature>, args: &Args) {
-    for overlap in new_overlap {
-        let feature = overlap.data.as_ref().unwrap();
-        match args.stranded.as_str() {
-            "yes" => {
-                //eprintln!("feature: {:?}", feature);
-                if feature.strand() == strand {
+    if new_overlap.len() > 0 {
+        for overlap in new_overlap {
+            let feature = overlap.data.as_ref().unwrap();
+            match args.stranded.as_str() {
+                "yes" => {
+                    //eprintln!("feature: {:?}", feature);
+                    if feature.strand() == strand {
+                        overlapping_features.push(feature.clone());
+                    }
+                },
+                "reverse" => {
+                    if feature.strand() != strand {
+                        overlapping_features.push(feature.clone());
+                    }
+                },
+                "no" => {
                     overlapping_features.push(feature.clone());
+                },
+                _ => {
+                    panic!("Invalid strandedness");
                 }
-            },
-            "reverse" => {
-                if feature.strand() != strand {
-                    overlapping_features.push(feature.clone());
-                }
-            },
-            "no" => {
-                overlapping_features.push(feature.clone());
-            },
-            _ => {
-                panic!("Invalid strandedness");
             }
         }
+    } else {
+        // we push an empty to be able to check later on if we have no feature for intersection purposes
+        overlapping_features.push(Feature::default());
     }
 }
