@@ -105,7 +105,7 @@ fn main() {
     // bam fields: https://docs.rs/bam/0.3.0/bam/record/struct.Record.html
 
     // Read the gtf file
-    let gtf = read_gtf(&args.gtf, args.t.as_str(), &ref_names_to_id);
+    let gtf = read_gtf(&args.gtf, args.t.as_str(), &ref_names_to_id, &args);
 
     // let read= 21940455;
     // eprintln!("Searching for reads overlapping position {}-{}...", read, read+25);
@@ -282,7 +282,7 @@ struct Args {
     as well. You can call this option multiple times: in that case, the combination of all attributes separated by colons (:) will be used as a unique identifier,
     e.g. for exons you might use -i gene_id -i exon_number."
     )]
-    _i: Vec<String>,
+    i: Vec<String>,
 
     // Name and type of the bam file
     #[structopt(name = "bam", default_value = "test.bam")]
@@ -370,12 +370,15 @@ fn prepare_count_hashmap(gtf: &Vec<Option<IntervalTree>>) -> HashMap<String, f32
     counts
 }
 
-fn read_gtf(file_path: &str, feature_type_filter: &str, ref_names_to_id: &HashMap<String, i32>) -> Vec<Option<IntervalTree>> {
+fn read_gtf(file_path: &str, feature_type_filter: &str, ref_names_to_id: &HashMap<String, i32>, args: &Args) -> Vec<Option<IntervalTree>> {
     let mut map: HashMap<i32, Vec<Interval>> = HashMap::new();
     let file = File::open(file_path).expect("Could not open this file");
     let mut reader = BufReader::new(file);
     let mut counter = 0;
     let mut line = String::default();
+    //TODO: deal with -i option correctly
+    // For now we just take the first -i option as the feature name
+    let attribute = args.i.first().unwrap();
     while reader.read_line(&mut line).unwrap() > 0 {
         counter += 1;
         if counter % 100000 == 0 {
@@ -403,11 +406,12 @@ fn read_gtf(file_path: &str, feature_type_filter: &str, ref_names_to_id: &HashMa
         let attributes = fields.nth(1).unwrap();
         //eprintln!("attributes: {}", attributes);
 
+
         let name = attributes.split(';')
-            .find(|&attr| attr.contains("gene_name"))
+            .find(|&attr| attr.contains(attribute))
             .unwrap_or("")
             .trim()
-            .strip_prefix("gene_name ")
+            .strip_prefix(format!("{} ", attribute).as_str())
             .unwrap_or("")
             .trim_matches('"');
 
