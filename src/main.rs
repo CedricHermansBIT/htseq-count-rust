@@ -349,8 +349,8 @@ struct Args {
     output_sam: Option<String>,
 }
 
-fn prepare_count_hashmap(gtf: &Vec<Option<IntervalTree>>) -> HashMap<String, f32> {
-    let mut counts: HashMap<String, f32> = HashMap::with_capacity(gtf.len());
+fn prepare_count_hashmap(gtf: &Vec<Option<IntervalTree>>) -> HashMap<String, f64> {
+    let mut counts: HashMap<String, f64> = HashMap::with_capacity(gtf.len());
     // add all features to the map
     for tree in gtf {
         if tree.is_none() {
@@ -362,11 +362,11 @@ fn prepare_count_hashmap(gtf: &Vec<Option<IntervalTree>>) -> HashMap<String, f32
     }
 
     // Add the special keys
-    counts.insert("__no_feature".to_string(), 0f32);
-    counts.insert("__ambiguous".to_string(), 0f32);
-    counts.insert("__not_aligned".to_string(), 0f32);
-    counts.insert("__too_low_aQual".to_string(), 0f32);
-    counts.insert("__alignment_not_unique".to_string(), 0f32);
+    counts.insert("__no_feature".to_string(), 0f64);
+    counts.insert("__ambiguous".to_string(), 0f64);
+    counts.insert("__not_aligned".to_string(), 0f64);
+    counts.insert("__too_low_aQual".to_string(), 0f64);
+    counts.insert("__alignment_not_unique".to_string(), 0f64);
     counts
 }
 
@@ -451,7 +451,7 @@ fn read_gtf(file_path: &str, feature_type_filter: &str, ref_names_to_id: &HashMa
 
 fn should_skip_record(
     record: &bam::Record,
-    counts: &mut HashMap<String, f32>,
+    counts: &mut HashMap<String, f64>,
     args: &Args,
     sender: &mpsc::Sender<FeatureType>,
 ) -> bool {
@@ -491,7 +491,7 @@ fn should_skip_record(
     false
 }
 
-fn print_output(counts: HashMap<String, f32>, args: Args, counter: i32) {
+fn print_output(counts: HashMap<String, f64>, args: Args, counter: i32) {
     // Print de HashMap
     let mut sorted_keys: Vec<_> = counts.keys().collect();
     // Sort the keys case-insensitively
@@ -522,7 +522,7 @@ fn print_output(counts: HashMap<String, f32>, args: Args, counter: i32) {
         println!(
             "Total number of uniquely mapped reads{}{}",
             args.delimiter,
-            counter as f32
+            counter as f64
                 - counts["__not_aligned"]
                 - counts["__too_low_aQual"]
                 - counts["__alignment_not_unique"]
@@ -532,7 +532,7 @@ fn print_output(counts: HashMap<String, f32>, args: Args, counter: i32) {
     }
 }
 
-fn write_counts(counts: HashMap<String, f32>, args: Args, counter: i32) {
+fn write_counts(counts: HashMap<String, f64>, args: Args, counter: i32) {
     let mut sorted_keys: Vec<_> = counts.keys().collect();
     // Sort the keys case-insensitively
     sorted_keys.sort();
@@ -551,7 +551,7 @@ fn write_counts(counts: HashMap<String, f32>, args: Args, counter: i32) {
 
     if args.counts {
         file.write_all(format!("Total number of uniquely mapped reads{}{}\n",args.delimiter,
-            counter as f32 - counts["__not_aligned"] - counts["__too_low_aQual"] - counts["__alignment_not_unique"] - counts["__ambiguous"] - counts["__no_feature"])
+            counter as f64 - counts["__not_aligned"] - counts["__too_low_aQual"] - counts["__alignment_not_unique"] - counts["__ambiguous"] - counts["__no_feature"])
             .as_bytes(),
         )
         .expect("Unable to write data");
@@ -559,7 +559,7 @@ fn write_counts(counts: HashMap<String, f32>, args: Args, counter: i32) {
 }
 
 
-fn count_reads(reads_reader: &mut ReadsReader, counter: &mut i32, counts: &mut HashMap<String, f32>, args: &Args, gtf: Vec<Option<IntervalTree>>, sender: mpsc::Sender<FeatureType>) {
+fn count_reads(reads_reader: &mut ReadsReader, counter: &mut i32, counts: &mut HashMap<String, f64>, args: &Args, gtf: Vec<Option<IntervalTree>>, sender: mpsc::Sender<FeatureType>) {
     let processing_function = match args._m.as_str() {
         "intersection-strict" => process_intersection_strict_read,
         "intersection-nonempty" => process_intersection_nonempty_read,
@@ -575,7 +575,7 @@ fn count_reads(reads_reader: &mut ReadsReader, counter: &mut i32, counts: &mut H
     };
 
     let mut record = bam::Record::new();
-    let mut overlapping_features: Vec<Feature> = Vec::with_capacity(50);
+    let mut overlapping_features: Vec<Vec<Feature>> = Vec::with_capacity(3);
     loop {
         overlapping_features.clear();
         match reads_reader.read_into(&mut record) {
@@ -617,23 +617,26 @@ fn count_reads(reads_reader: &mut ReadsReader, counter: &mut i32, counts: &mut H
                     continue;
                 }
                 let partial_end_pos = start_pos + cig.0 as i32 -1 ;
-                if record.name() == "SRR5724993.50152400".to_string().as_bytes(){
+                // if record.name() == "SRR5724993.50152400".to_string().as_bytes(){
 
-                    eprintln!("start_pos: {}, end_pos: {}, cig:{:?}", start_pos, partial_end_pos, cig);
-                }
+                //     eprintln!("start_pos: {}, end_pos: {}, cig:{:?}", start_pos, partial_end_pos, cig);
+                // }
                 
                 processing_function(features,  start_pos, partial_end_pos, record.flag().is_reverse_strand(), &mut overlapping_features, args);
-                if record.name() == "SRR5724993.50152400".to_string().as_bytes(){
-                    eprintln!("overlapping_features: {:?}", overlapping_features);
-                }
+                // if record.name() == "SRR5724993.50152400".to_string().as_bytes(){
+                //     eprintln!("overlapping_features: {:?}", overlapping_features);
+                // }
                 start_pos = partial_end_pos;
             }
 
             // get the unique feature_names from the overlapping features, also filter out the empty names
             let mut unique_feature_names= ambiguity_function(&overlapping_features);
-            
+            // if record.name() == "SRR5724993.50152400".to_string().as_bytes(){
+            //     eprintln!("unique_feature_names: {:?}", unique_feature_names);
+            // }
             // match based on the amount of unique feature names
             let feature_name_len = unique_feature_names.len();
+
             match feature_name_len {
                 0 => {
                     // if there are no unique feature names, we have no feature
@@ -660,7 +663,7 @@ fn count_reads(reads_reader: &mut ReadsReader, counter: &mut i32, counts: &mut H
                             // we increment each feature name by 1 divided by the amount of unique feature names
                             let fractional_count = 1.0 / feature_name_len as f32;
                             for feature_name in unique_feature_names.clone() {
-                                *counts.entry(feature_name.clone()).or_insert(0.0) += fractional_count;
+                                *counts.entry(feature_name.clone()).or_insert(0.0) += fractional_count as f64;
                             }
                         },
                         "random" => {
@@ -687,7 +690,7 @@ fn count_reads(reads_reader: &mut ReadsReader, counter: &mut i32, counts: &mut H
     eprintln!("{} records processed.", counter);
 }
 
-fn process_union_read(features: &IntervalTree, start_pos: i32, end_pos: i32, is_reverse_strand: bool, overlapping_features: &mut Vec<Feature>, args: &Args) {
+fn process_union_read(features: &IntervalTree, start_pos: i32, end_pos: i32, is_reverse_strand: bool, overlapping_features: &mut Vec<Vec<Feature>>, args: &Args) {
     let new_overlap = features.overlap(start_pos, end_pos);
     let strand = if is_reverse_strand { '-' } else { '+' };
     // add all overlapping features to the list
@@ -695,11 +698,11 @@ fn process_union_read(features: &IntervalTree, start_pos: i32, end_pos: i32, is_
     
 }
 
-fn process_intersection_nonempty_read(_features: &IntervalTree, _start_pos: i32, _end_pos: i32, _strand: bool, _overlapping_features: &mut Vec<Feature>, _args: &Args) {
+fn process_intersection_nonempty_read(_features: &IntervalTree, _start_pos: i32, _end_pos: i32, _strand: bool, _overlapping_features: &mut Vec<Vec<Feature>>, _args: &Args) {
     todo!("process_partial_read for intersection-nonempty");
 }
 
-fn process_intersection_strict_read(features: &IntervalTree, start_pos: i32, end_pos: i32, strand: bool, overlapping_features: &mut Vec<Feature>, args: &Args) {
+fn process_intersection_strict_read(features: &IntervalTree, start_pos: i32, end_pos: i32, strand: bool, overlapping_features: &mut Vec<Vec<Feature>>, args: &Args) {
     //todo!("process_partial_read for intersection-strict");
     // Problem now: if we have partial reads: each part must overlap with the same feature, if different parts overlap with different features, we should not count the read as feature but as no_feature
     let new_contained = features.contains(start_pos, end_pos);
@@ -710,28 +713,47 @@ fn process_intersection_strict_read(features: &IntervalTree, start_pos: i32, end
 }
 
 fn filter_ambiguity_union(
-    overlapping_features: &[Feature],
+    overlapping_features: &[Vec<Feature>],
 ) -> Vec<String> {
+    // flatten the Vec of Vecs to a single Vec
+    let overlapping_features: Vec<&Feature> = overlapping_features.iter().flatten().collect();
     let unique_feature_names: HashSet<String> = overlapping_features.iter().map(|x| x.name().to_string().clone()).filter(|x| !x.is_empty()).collect();
     unique_feature_names.into_iter().collect()
 }
 
 fn filter_ambiguity_intersection(
-    overlapping_features: &[Feature],
+    overlapping_features: &[Vec<Feature>],
 ) -> Vec<String> {
     // if any of the results is empty, we have no feature, so we return an empty Vec
-    if overlapping_features.iter().any(|x| x.name().is_empty()) {
+    if overlapping_features.iter().any(|x| x.is_empty()) {
         return Vec::new()
     
     // otherwise, we return the unique feature names
     } else {
-        let unique_feature_names: HashSet<String> = overlapping_features.iter().map(|x| x.name().to_string().clone()).collect();
-        unique_feature_names.into_iter().collect()
-    }
+        let mut feature_counts: HashMap<String, usize> = HashMap::new();
+        let total = overlapping_features.len();
 
+        for features in overlapping_features.iter() {
+            let feature_names: HashSet<String> = features.iter().map(|x| x.name().to_string()).collect();
+            for name in feature_names {
+                *feature_counts.entry(name).or_insert(0) += 1;
+            }
+        }
+
+        let unique_feature_names: Vec<String> = feature_counts.into_iter()
+            .filter(|&(_, count)| count == total)
+            .map(|(name, _)| name)
+            .filter(|name| !name.is_empty())
+            .collect();
+
+        unique_feature_names
+    }
 }
 
-fn add_stranded_features(new_overlap: Vec<&Interval>, strand: char, overlapping_features: &mut Vec<Feature>, args: &Args) {
+fn add_stranded_features(new_overlap: Vec<&Interval>, strand: char, overlapping_features: &mut Vec<Vec<Feature>>, args: &Args) {
+    // add empty Vec to the overlapping_features list
+    overlapping_features.push(Vec::new());
+    let index = overlapping_features.len() - 1;
     if new_overlap.len() > 0 {
         for overlap in new_overlap {
             let feature = overlap.data.as_ref().unwrap();
@@ -739,16 +761,16 @@ fn add_stranded_features(new_overlap: Vec<&Interval>, strand: char, overlapping_
                 "yes" => {
                     //eprintln!("feature: {:?}", feature);
                     if feature.strand() == strand {
-                        overlapping_features.push(feature.clone());
+                        overlapping_features[index].push(feature.clone());
                     }
                 },
                 "reverse" => {
                     if feature.strand() != strand {
-                        overlapping_features.push(feature.clone());
+                        overlapping_features[index].push(feature.clone());
                     }
                 },
                 "no" => {
-                    overlapping_features.push(feature.clone());
+                    overlapping_features[index].push(feature.clone());
                 },
                 _ => {
                     panic!("Invalid strandedness");
@@ -757,6 +779,6 @@ fn add_stranded_features(new_overlap: Vec<&Interval>, strand: char, overlapping_
         }
     } else {
         // we push an empty to be able to check later on if we have no feature for intersection purposes
-        overlapping_features.push(Feature::default());
+        overlapping_features[index].push(Feature::default());
     }
 }
