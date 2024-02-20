@@ -34,11 +34,20 @@ impl IntervalTree {
 
             // For each name in the HashMap, sort the intervals by their start position and then merge the overlapping intervals.
             for intervals in grouped_intervals.values_mut() {
-                intervals.sort_by(|a, b| a.start.cmp(&b.start));
+                // sort first by start, then by end
+                intervals.sort_by(|a, b| a.start.cmp(&b.start).then(a.end.cmp(&b.end)));
                 let mut i = 0;
                 while i < intervals.len() - 1 {
-                    if intervals[i].end >= intervals[i+1].start && intervals[i+1].end >= intervals[i].end {
-                        intervals[i].end = intervals[i+1].end;
+                    // if intervals[i].name() == Some("WDSUB1") {
+                    //     eprintln!("interval[i]: {:?}, interval[i+1]: {:?}", intervals[i], intervals[i+1]);
+                    // }
+                    // Note the -1: this is because two features can be directly adjacent. Then we also want to merge them.
+                    if intervals[i].end >= (intervals[i+1].start -1){
+                        // Update the end if the next interval's end is greater than the current interval's end.
+                        // But if it is entirely contained within the current interval, we don't need to do anything except to still remove the fully contained interval.
+                        if intervals[i+1].end >= intervals[i].end {
+                            intervals[i].end = intervals[i+1].end;
+                        }
                         intervals.remove(i+1);
                     } else {
                         i += 1;
