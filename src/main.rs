@@ -571,10 +571,15 @@ fn count_reads(reads_reader: &mut ReadsReader, counter: &mut i32, counts: &mut H
         "union" => process_union_read,
         _ => panic!("Invalid mode"),
     };
+    
+    let debug_read = "SRR5724993.27326844".to_string();
+
+
+    let debug_read_bytes = debug_read.as_bytes();
 
     let ambiguity_function = match args._m.as_str() {
-        "intersection-strict" => filter_ambiguity_intersection,
-        "intersection-nonempty" => filter_ambiguity_intersection,
+        "intersection-strict" => filter_ambiguity_intersection_strict,
+        "intersection-nonempty" => filter_ambiguity_intersection_nonempty,
         "union" => filter_ambiguity_union,
         _ => panic!("Invalid mode"),
     };
@@ -695,16 +700,45 @@ fn count_reads(reads_reader: &mut ReadsReader, counter: &mut i32, counts: &mut H
     eprintln!("{} records processed.", counter);
 }
 
-fn process_union_read(features: &IntervalTree, start_pos: i32, end_pos: i32, is_reverse_strand: bool, overlapping_features: &mut Vec<Vec<Feature>>, args: &Args) {
+fn process_union_read(features: &IntervalTree, start_pos: i32, end_pos: i32, strand: bool, overlapping_features: &mut Vec<Vec<Feature>>, args: &Args) {
     let new_overlap = features.overlap(start_pos, end_pos);
-    let strand = if is_reverse_strand { '-' } else { '+' };
+    let strand = if strand { '-' } else { '+' };
     // add all overlapping features to the list
     add_stranded_features(new_overlap, strand, overlapping_features, args);
     
 }
 
-fn process_intersection_nonempty_read(_features: &IntervalTree, _start_pos: i32, _end_pos: i32, _strand: bool, _overlapping_features: &mut Vec<Vec<Feature>>, _args: &Args) {
-    todo!("process_partial_read for intersection-nonempty");
+fn process_intersection_nonempty_read(features: &IntervalTree, start_pos: i32, end_pos: i32, strand: bool, overlapping_features: &mut Vec<Vec<Feature>>, args: &Args) {
+    //todo!("process_partial_read for intersection-nonempty");
+    let new_overlap = features.overlap(start_pos, end_pos);
+    let new_contained = features.contains(start_pos, end_pos);
+
+    // if contained is not empty, we add it to the list, otherwise we add the overlap
+    let strand = if strand { '-' } else { '+' };
+    if new_contained.len() > 0 {
+        add_stranded_features(new_contained, strand, overlapping_features, args);
+    } else {
+        // check that the overlapping features also overlap each other, if not, then we should not count the read as feature but as no_feature
+        if new_overlap.len() > 1 {
+            let mut iter = new_overlap.iter();
+            let first = iter.next().unwrap();
+            let mut all_overlap = true;
+            for interval in iter {
+                if !first.overlaps(interval) && first.name() != interval.name() {
+                    all_overlap = false;
+                    break;
+                }
+            }
+            if all_overlap {
+                add_stranded_features(new_overlap, strand, overlapping_features, args);
+            } else {
+                overlapping_features.push(Vec::new());
+            }
+        } else {
+            add_stranded_features(new_overlap, strand, overlapping_features, args);
+        }
+        //add_stranded_features(new_overlap, strand, overlapping_features, args);
+    }
 }
 
 fn process_intersection_strict_read(features: &IntervalTree, start_pos: i32, end_pos: i32, strand: bool, overlapping_features: &mut Vec<Vec<Feature>>, args: &Args) {
@@ -726,7 +760,7 @@ fn filter_ambiguity_union(
     unique_feature_names.into_iter().collect()
 }
 
-fn filter_ambiguity_intersection(
+fn filter_ambiguity_intersection_strict(
     overlapping_features: &[Vec<Feature>],
 ) -> Vec<String> {
     // if any of the results is empty, we have no feature, so we return an empty Vec
@@ -755,6 +789,32 @@ fn filter_ambiguity_intersection(
     }
 }
 
+
+fn filter_ambiguity_intersection_nonempty(
+    overlapping_features: &[Vec<Feature>],
+) -> Vec<String> {
+
+    // this is now basically a union, except for the case that multiple parts have different features that do not occur in both parts
+    // first loop through the vec and take the intersection of all the features, if it is empty, return an empty vec
+    let mut unique_feature_names: HashSet<String> = HashSet::new();
+    for features in overlapping_features.iter() {
+        let feature_names: HashSet<String> = features.iter().map(|x| x.name().to_string()).collect();
+        if unique_feature_names.is_empty() {
+            unique_feature_names = feature_names;
+        } else {
+            if feature_names.len() != 0 {
+                unique_feature_names = unique_feature_names.intersection(&feature_names).map(|x| x.to_string()).collect();
+            }
+        }
+    }
+    if unique_feature_names.is_empty() {
+        return Vec::new();
+    }
+    return unique_feature_names.into_iter().collect();
+}
+
+    
+
 fn add_stranded_features(new_overlap: Vec<&Interval>, strand: char, overlapping_features: &mut Vec<Vec<Feature>>, args: &Args) {
     // add empty Vec to the overlapping_features list
     overlapping_features.push(Vec::new());
@@ -782,8 +842,5 @@ fn add_stranded_features(new_overlap: Vec<&Interval>, strand: char, overlapping_
                 }
             }
         }
-    } else {
-        // we push an empty to be able to check later on if we have no feature for intersection purposes
-        overlapping_features[index].push(Feature::default());
     }
 }
