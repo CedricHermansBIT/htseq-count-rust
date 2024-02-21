@@ -28,6 +28,8 @@ htseq-count-rust alignments.bam genes.gtf
 htseq-count-rust -s no -t exon -i gene_id -m intersection-strict -d , -a 10 -n 8 --nonunique all --secondary-alignments ignore --supplementary-alignments ignore -o alignments_out.sam alignments.bam genes.gtf
 ```
 
+Note: currently, only one SAM/BAM file can be provided. If you want to run the tool on multiple files, you will need to run them separately.
+
 ### Options
 
 The following options are currently supported:
