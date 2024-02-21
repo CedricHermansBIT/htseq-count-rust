@@ -572,10 +572,8 @@ fn count_reads(reads_reader: &mut ReadsReader, counter: &mut i32, counts: &mut H
         _ => panic!("Invalid mode"),
     };
     
-    let debug_read = "SRR5724993.27326844".to_string();
-
-
-    let debug_read_bytes = debug_read.as_bytes();
+    //let debug_read = "SRR5724993.27326844".to_string();
+    //let debug_read_bytes = debug_read.as_bytes();
 
     let ambiguity_function = match args._m.as_str() {
         "intersection-strict" => filter_ambiguity_intersection_strict,
@@ -615,10 +613,10 @@ fn count_reads(reads_reader: &mut ReadsReader, counter: &mut i32, counts: &mut H
                 if cig.1 != Operation::AlnMatch {
                     // Skip all cigar elements that are not matches, but add the length to the start position
                     // Soft clips are not added to the start position
-                    /* if record.name() == "SRR5724993.43083906".to_string().as_bytes(){
+                    // if record.name() == debug_read_bytes{
 
-                        eprintln!("start_pos: {}, cig:{:?}", start_pos, cig);
-                    } */
+                    //     eprintln!("start_pos: {}, cig:{:?}", start_pos, cig);
+                    // }
                     match cig.1 {
                         Operation::Soft => {},
                         Operation::Insertion => start_pos += 1,
@@ -627,13 +625,13 @@ fn count_reads(reads_reader: &mut ReadsReader, counter: &mut i32, counts: &mut H
                     continue;
                 }
                 let partial_end_pos = start_pos + cig.0 as i32 -1 ;
-                // if record.name() == "SRR5724993.50152400".to_string().as_bytes(){
+                // if record.name() == debug_read_bytes {
 
                 //     eprintln!("start_pos: {}, end_pos: {}, cig:{:?}", start_pos, partial_end_pos, cig);
                 // }
                 
                 processing_function(features,  start_pos, partial_end_pos, record.flag().is_reverse_strand(), &mut overlapping_features, args);
-                // if record.name() == "SRR5724993.50152400".to_string().as_bytes(){
+                // if record.name() == debug_read_bytes{
                 //     eprintln!("overlapping_features: {:?}", overlapping_features);
                 // }
                 start_pos = partial_end_pos;
@@ -641,7 +639,7 @@ fn count_reads(reads_reader: &mut ReadsReader, counter: &mut i32, counts: &mut H
 
             // get the unique feature_names from the overlapping features, also filter out the empty names
             let mut unique_feature_names= ambiguity_function(&overlapping_features);
-            // if record.name() == "SRR5724993.50152400".to_string().as_bytes(){
+            // if record.name() == debug_read_bytes{
             //     eprintln!("unique_feature_names: {:?}", unique_feature_names);
             // }
             // match based on the amount of unique feature names
