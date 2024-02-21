@@ -238,14 +238,13 @@ struct Args {
     // Number of threads
     #[structopt(
         short = "n",
-        long = "number",
-        default_value = "10",
+        long = "threads",
+        default_value = "4",
         help = "Number of threads"
     )]
     n: u16,
 
     // Mode
-    // TODO: implement other modes
     #[structopt(short = "m", long = "mode", default_value = "union", possible_values = &["intersection-strict", "intersection-nonempty", "union"], help = "Mode to use for counting reads overlapping features. Possible values: intersection-strict, intersection-nonempty, union (default: intersection-strict).")]
     _m: String,
 
