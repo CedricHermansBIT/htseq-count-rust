@@ -50,45 +50,51 @@ fn main() {
         thread::spawn(move || {
             let mut output_sam = SamWriter::from_path(output_sam, header).expect("Could not create output sam file");
             let mut bam = ReadsReader::from_path(input_reads, args.n);
-            // read the
             let mut record= bam::Record::new();
             for type_ in receiver {
-                record = match bam.read_into(&mut record) {
-                    Ok(true) => record,
+                match bam.read_into(&mut record) {
+                    Ok(true) => (),
                     Ok(false) => break,
                     Err(e) => panic!("{}", e),
                 };
                 let feature = type_.as_bytes();
 
+                // For now I'll ignore the following code, since it needlessly slows down the program, and the A or Z should not really matter.
+
                 // if 'XS' tag (strandedness) already exists, change the type from A (character) to Z (string) // else, do nothing
                 // we change this tag from A to Z because htseqcount does this as well
-                // TODO: check if we need to support this or not since it is extra work, for no obvious reason
-                if record.tags().get(b"XS").is_some() {
-                    //get a copy from all tags
-                    let tags = record.tags().clone();
-                    // clear the old tags
-                    record.tags_mut().clear();
-                    // add the old tags back, but change the type of the XS tag to Z
-                    for (key, value) in tags.iter() {
-                        match value {
-                            TagValue::Char(c) => {
-                                if key == *b"XS" {
-                                    // note: c = + or -, but are represented as 43 and 45 in ASCII
-                                    record.tags_mut().push_string(b"XS", &[c]);
-                                } else {
-                                    record.tags_mut().push_char(&key, c);
-                                }
-                            }
-                            TagValue::Int(i, _t) => record.tags_mut().push_num(&key, i as i32),
-                            TagValue::Float(f) => record.tags_mut().push_num(&key, f),
-                            TagValue::String(s, _t) => record.tags_mut().push_string(&key, s),
-                            TagValue::FloatArray(a) => record.tags_mut().push_array(&key, a.raw()),
-                            TagValue::IntArray(a) => record.tags_mut().push_array(&key, a.raw()),
-                        }
-                    }
+                // Note: following code will place the tag at the end of the tags, so doing diff with htseqcount will not work
+                // if let Some(TagValue::Char(c)) = record.tags().get(b"XS") {
+                //     record.tags_mut().push_string(b"XS", &[c]);
+                // }
 
-                    //eprintln!("tags: {:?}", record.tags().raw());
-                }
+
+                // if record.tags().get(b"XS").is_some() {
+                //     //get a copy from all tags
+                //     let tags = record.tags().clone();
+                //     // clear the old tags
+                //     record.tags_mut().clear();
+                //     // add the old tags back, but change the type of the XS tag to Z
+                //     for (key, value) in tags.iter() {
+                //         match value {
+                //             TagValue::Char(c) => {
+                //                 if key == *b"XS" {
+                //                     // note: c = + or -, but are represented as 43 and 45 in ASCII
+                //                     record.tags_mut().push_string(b"XS", &[c]);
+                //                 } else {
+                //                     record.tags_mut().push_char(&key, c);
+                //                 }
+                //             }
+                //             TagValue::Int(i, _t) => record.tags_mut().push_num(&key, i as i32),
+                //             TagValue::Float(f) => record.tags_mut().push_num(&key, f),
+                //             TagValue::String(s, _t) => record.tags_mut().push_string(&key, s),
+                //             TagValue::FloatArray(a) => record.tags_mut().push_array(&key, a.raw()),
+                //             TagValue::IntArray(a) => record.tags_mut().push_array(&key, a.raw()),
+                //         }
+                //     }
+
+                //     //eprintln!("tags: {:?}", record.tags().raw());
+                // }
                 
                 // push also the feature to the XF tag
                 record.tags_mut().push_string(b"XF", &feature);
