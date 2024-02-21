@@ -339,6 +339,10 @@ impl IntervalTree {
         for (&key, _) in self.boundary_table.range(start..=end) {
             result.extend(root.search_point(key));
         }
+        // filter out duplicates
+        result.sort();
+        result.dedup();
+        
         result
     }
 
