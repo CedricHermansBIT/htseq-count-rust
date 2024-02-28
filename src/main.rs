@@ -171,10 +171,16 @@ impl ReadsReader {
     fn from_path(path: String, n: u16) -> ReadsReader {
         if path.ends_with(".bam") {
             let reader = BamReader::from_path(path, n);
-            ReadsReader::BamReader(reader.unwrap())
+            match reader {
+                Ok(reader) => ReadsReader::BamReader(reader),
+                Err(e) => panic!("{}", e),
+            }
         } else if path.ends_with(".sam") {
             let reader = SamReader::from_path(path);
-            ReadsReader::SamReader(reader.unwrap())
+            match reader {
+                Ok(reader) => ReadsReader::SamReader(reader),
+                Err(e) => panic!("{}", e),
+            }
         } else {
             panic!("File type not supported");
         }
