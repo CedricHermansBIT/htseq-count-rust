@@ -170,10 +170,10 @@ impl ReadsReader {
 
     fn from_path(path: String, n: u16) -> ReadsReader {
         if path.ends_with(".bam") {
-            let reader = BamReader::from_path(path, n);
+            let reader = BamReader::from_path(path.clone(), n);
             match reader {
                 Ok(reader) => ReadsReader::BamReader(reader),
-                Err(e) => panic!("{}", e),
+                Err(e) => panic!("{}, File: {}", e, path),
             }
         } else if path.ends_with(".sam") {
             let reader = SamReader::from_path(path);
