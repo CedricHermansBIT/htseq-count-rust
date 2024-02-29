@@ -176,7 +176,7 @@ impl ReadsReader {
                 Err(e) => panic!("{}, File: {}", e, path),
             }
         } else if path.ends_with(".sam") {
-            let reader = SamReader::from_path(path);
+            let reader = SamReader::from_path(path.clone());
             match reader {
                 Ok(reader) => ReadsReader::SamReader(reader),
                 Err(e) => panic!("{}, File: {}", e, path),
