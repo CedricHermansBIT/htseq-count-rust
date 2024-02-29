@@ -179,7 +179,7 @@ impl ReadsReader {
             let reader = SamReader::from_path(path);
             match reader {
                 Ok(reader) => ReadsReader::SamReader(reader),
-                Err(e) => panic!("{}", e),
+                Err(e) => panic!("{}, File: {}", e, path),
             }
         } else {
             panic!("File type not supported");
@@ -296,11 +296,11 @@ struct Args {
     i: Vec<String>,
 
     // Name and type of the bam file
-    #[structopt(name = "bam", default_value = "test.bam")]
+    #[structopt(name = "bam")]
     bam: String,
 
     // Name and type of the gtf file
-    #[structopt(name = "gtf", default_value = "test.gtf")]
+    #[structopt(name = "gtf")]
     gtf: String,
 
     // Secondary alignment mode
