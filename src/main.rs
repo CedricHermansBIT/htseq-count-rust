@@ -8,7 +8,7 @@ use std::borrow::Cow;
 use std::cmp::{max, min};
 use std::collections::VecDeque;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Read as IoRead, Write};
+use std::io::{BufRead, BufReader, Read as IoRead};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Instant;
@@ -837,7 +837,7 @@ fn find_attribute_bytes<'a>(raw: &'a [u8], wanted: &[u8]) -> Option<&'a [u8]> {
 
     for index in 0..=raw.len() {
         let at_end = index == raw.len();
-        if (!at_end) {
+        if !at_end {
             match raw[index] {
                 b'"' => in_quotes = !in_quotes,
                 b';' if !in_quotes => {}
@@ -1204,82 +1204,6 @@ fn sorted_feature_indices(counts: &Counts) -> Vec<usize> {
             .cmp(counts.feature_names[*b].as_ref())
     });
     indices
-}
-
-fn print_output(counts: Counts, args: Args, counter: i32) {
-    for feature_id in sorted_feature_indices(&counts) {
-        println!(
-            "{}{}{}",
-            counts.feature_names[feature_id],
-            args.delimiter,
-            counts.feature_counts[feature_id]
-        );
-    }
-
-    println!("__no_feature{}{}", args.delimiter, counts.no_feature);
-    println!("__ambiguous{}{}", args.delimiter, counts.ambiguous);
-    println!("__too_low_aQual{}{}", args.delimiter, counts.too_low_aqual);
-    println!("__not_aligned{}{}", args.delimiter, counts.not_aligned);
-    println!(
-        "__alignment_not_unique{}{}",
-        args.delimiter,
-        counts.alignment_not_unique
-    );
-
-    if args.counts {
-        println!(
-            "Total number of uniquely mapped reads{}{}",
-            args.delimiter,
-            counter as f64 - counts.special_total()
-        );
-    }
-}
-
-fn write_counts(counts: Counts, args: Args, counter: i32) {
-    let mut file = File::create(args.counts_output.unwrap())
-        .expect("Unable to create file");
-
-    for feature_id in sorted_feature_indices(&counts) {
-        writeln!(
-            file,
-            "{}{}{}",
-            counts.feature_names[feature_id],
-            args.delimiter,
-            counts.feature_counts[feature_id]
-        )
-        .expect("Unable to write data");
-    }
-
-    writeln!(file, "__no_feature{}{}", args.delimiter, counts.no_feature)
-        .expect("Unable to write data");
-    writeln!(file, "__ambiguous{}{}", args.delimiter, counts.ambiguous)
-        .expect("Unable to write data");
-    writeln!(
-        file,
-        "__too_low_aQual{}{}",
-        args.delimiter,
-        counts.too_low_aqual
-    )
-    .expect("Unable to write data");
-    writeln!(file, "__not_aligned{}{}", args.delimiter, counts.not_aligned)
-        .expect("Unable to write data");
-    writeln!(
-        file,
-        "__alignment_not_unique{}{}",
-        args.delimiter,
-        counts.alignment_not_unique
-    )
-    .expect("Unable to write data");
-
-    if args.counts {
-        writeln!(
-            file,
-            "Total number of uniquely mapped reads{}{}",
-            args.delimiter,
-            counter as f64 - counts.special_total()
-        )
-        .expect("Unable to write data");
-    }
 }
 
 fn add_record_blocks<'a>(
