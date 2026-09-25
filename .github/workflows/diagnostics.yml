@@ -25,24 +25,8 @@ jobs:
       - name: Show reference version
         run: htseq-count --version
 
-      - name: Show latest direct dependency versions
-        run: |
-          cargo search structopt --limit 1
-          cargo search bam --limit 1
-          cargo search rand --limit 1
-          cargo search clap --limit 1
-
-      - name: Refresh dependency lockfile
-        run: cargo update
-
       - name: Build Rust release
-        run: cargo build --release
-
-      - name: Emit refreshed lockfile
-        run: |
-          echo "CARGO_LOCK_BEGIN"
-          cat Cargo.lock
-          echo "CARGO_LOCK_END"
+        run: cargo build --release --locked
 
       - name: Run parity diagnostics
         run: python tests/parity_against_htseq.py --rust-bin target/release/htseq_count_rust --fuzz 150 --paired-fuzz 100
