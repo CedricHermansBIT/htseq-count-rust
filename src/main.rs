@@ -39,17 +39,19 @@ fn main() {
     let reference_names: Vec<String> = header.reference_names().to_owned();
     let ref_names_to_id: HashMap<String, i32> = reference_names.iter().enumerate().map(|(i, s)| (s.clone(), i as i32)).collect();
     
-    // Spawn a thread to write the output sam file
-    let (sender, receiver) = mpsc::channel::<FeatureType>();
-    //let mut output_sam: Option<SamWriter<BufWriter<File>>> = None;
-    // by default, the writer thread does nothing and discards the input
+    // Only create the assignment channel when --samout is actually used.
+    // The old code sent one message per record to a thread that simply discarded
+    // it during normal counting, which added synchronization overhead to the hot path.
     let output_sam = args.output_sam.clone();
     let input_reads = args.bam.clone();
-    let writer_thread = if let Some(output_sam) = output_sam {
-        thread::spawn(move || {
-            let mut output_sam = SamWriter::from_path(output_sam, header).expect("Could not create output sam file");
-            let mut bam = ReadsReader::from_path(input_reads, args.n);
-            let mut record= bam::Record::new();
+    let reader_threads = args.n;
+    let (assignment_sender, writer_thread) = if let Some(output_sam) = output_sam {
+        let (sender, receiver) = mpsc::channel::<FeatureType>();
+        let writer_thread = thread::spawn(move || {
+            let mut output_sam = SamWriter::from_path(output_sam, header)
+                .expect("Could not create output sam file");
+            let mut bam = ReadsReader::from_path(input_reads, reader_threads);
+            let mut record = bam::Record::new();
             for type_ in receiver {
                 match bam.read_into(&mut record) {
                     Ok(true) => (),
@@ -57,55 +59,13 @@ fn main() {
                     Err(e) => panic!("{}", e),
                 };
                 let feature = type_.as_bytes();
-
-                // For now I'll ignore the following code, since it needlessly slows down the program, and the A or Z should not really matter.
-
-                // if 'XS' tag (strandedness) already exists, change the type from A (character) to Z (string) // else, do nothing
-                // we change this tag from A to Z because htseqcount does this as well
-                // Note: following code will place the tag at the end of the tags, so doing diff with htseqcount will not work
-                // if let Some(TagValue::Char(c)) = record.tags().get(b"XS") {
-                //     record.tags_mut().push_string(b"XS", &[c]);
-                // }
-
-
-                // if record.tags().get(b"XS").is_some() {
-                //     //get a copy from all tags
-                //     let tags = record.tags().clone();
-                //     // clear the old tags
-                //     record.tags_mut().clear();
-                //     // add the old tags back, but change the type of the XS tag to Z
-                //     for (key, value) in tags.iter() {
-                //         match value {
-                //             TagValue::Char(c) => {
-                //                 if key == *b"XS" {
-                //                     // note: c = + or -, but are represented as 43 and 45 in ASCII
-                //                     record.tags_mut().push_string(b"XS", &[c]);
-                //                 } else {
-                //                     record.tags_mut().push_char(&key, c);
-                //                 }
-                //             }
-                //             TagValue::Int(i, _t) => record.tags_mut().push_num(&key, i as i32),
-                //             TagValue::Float(f) => record.tags_mut().push_num(&key, f),
-                //             TagValue::String(s, _t) => record.tags_mut().push_string(&key, s),
-                //             TagValue::FloatArray(a) => record.tags_mut().push_array(&key, a.raw()),
-                //             TagValue::IntArray(a) => record.tags_mut().push_array(&key, a.raw()),
-                //         }
-                //     }
-
-                //     //eprintln!("tags: {:?}", record.tags().raw());
-                // }
-                
-                // push also the feature to the XF tag
                 record.tags_mut().push_string(b"XF", &feature);
                 output_sam.write(&record).unwrap();
             }
-        })
+        });
+        (Some(sender), Some(writer_thread))
     } else {
-        thread::spawn(move || { 
-            for _ in receiver {
-                // do nothing
-            }
-        })
+        (None, None)
     };
     // bam fields: https://docs.rs/bam/0.3.0/bam/record/struct.Record.html
 
@@ -138,12 +98,21 @@ fn main() {
     //let mut read_to_feature: Vec<FeatureType> = Vec::new();
     let mut counter = 0;
 
-    count_reads(&mut reads_reader, &mut counter, &mut counts, &args, gtf, sender);
-    
-    if args.output_sam.is_some() {
+    count_reads(
+        &mut reads_reader,
+        &mut counter,
+        &mut counts,
+        &args,
+        gtf,
+        assignment_sender.as_ref(),
+    );
+
+    // Closing the sender lets the SAM writer terminate its receive loop.
+    drop(assignment_sender);
+    if let Some(writer_thread) = writer_thread {
         eprintln!("Waiting for writer thread to finish...");
+        writer_thread.join().unwrap();
     }
-    writer_thread.join().unwrap();
     
     if args.counts_output.is_some() {
         write_counts(counts, args, counter);
@@ -524,39 +493,37 @@ fn should_skip_record(
     record: &bam::Record,
     counts: &mut HashMap<String, f64>,
     args: &Args,
-    sender: &mpsc::Sender<FeatureType>,
+    sender: Option<&mpsc::Sender<FeatureType>>,
 ) -> bool {
     if !record.flag().is_mapped() || record.ref_id() < 0 {
-        _ = sender.send(FeatureType::NotAligned);
-        *counts.entry("__not_aligned".to_string()).or_insert(0.0) += 1.0;
+        if let Some(sender) = sender { let _ = sender.send(FeatureType::NotAligned); }
+        *counts.get_mut("__not_aligned").unwrap() += 1.0;
         return true;
     }
 
     if args.secondary_alignments == "ignore" && record.flag().all_bits(0x100) {
-        _ = sender.send(FeatureType::None);
+        if let Some(sender) = sender { let _ = sender.send(FeatureType::None); }
         return true;
     }
 
     if args.supplementary_alignments == "ignore" && record.flag().all_bits(0x800) {
-        _ = sender.send(FeatureType::None);
+        if let Some(sender) = sender { let _ = sender.send(FeatureType::None); }
         return true;
     }
 
     if let Some(TagValue::Int(i, _)) = record.tags().get(b"NH") {
         if i > 1 {
-            *counts
-                .entry("__alignment_not_unique".to_string())
-                .or_insert(0.0) += 1.0;
+            *counts.get_mut("__alignment_not_unique").unwrap() += 1.0;
             if args.nonunique == "none" {
-                _ = sender.send(FeatureType::AlignmentNotUnique);
+                if let Some(sender) = sender { let _ = sender.send(FeatureType::AlignmentNotUnique); }
                 return true;
             }
         }
     }
 
     if record.mapq() < args.a {
-        _ = sender.send(FeatureType::TooLowaQual);
-        *counts.entry("__too_low_aQual".to_string()).or_insert(0.0) += 1.0;
+        if let Some(sender) = sender { let _ = sender.send(FeatureType::TooLowaQual); }
+        *counts.get_mut("__too_low_aQual").unwrap() += 1.0;
         return true;
     }
 
@@ -696,7 +663,7 @@ fn assign_overlaps(
     overlapping_features: &[Vec<Feature>],
     counts: &mut HashMap<String, f64>,
     args: &Args,
-    sender: &mpsc::Sender<FeatureType>,
+    sender: Option<&mpsc::Sender<FeatureType>>,
 ) {
     let ambiguity_function = ambiguity_function_for_mode(args._m.as_str());
     let mut unique_feature_names = ambiguity_function(overlapping_features);
@@ -704,20 +671,20 @@ fn assign_overlaps(
 
     match feature_name_len {
         0 => {
-            *counts.entry("__no_feature".to_string()).or_insert(0.0) += 1.0;
-            _ = sender.send(FeatureType::NoFeature);
+            *counts.get_mut("__no_feature").unwrap() += 1.0;
+            if let Some(sender) = sender { let _ = sender.send(FeatureType::NoFeature); }
         }
         1 => {
             let feature_name = unique_feature_names.first().unwrap();
-            *counts.entry(feature_name.clone()).or_insert(0.0) += 1.0;
-            _ = sender.send(FeatureType::Name(feature_name.clone()));
+            *counts.get_mut(feature_name.as_str()).unwrap() += 1.0;
+            if let Some(sender) = sender { let _ = sender.send(FeatureType::Name(feature_name.clone())); }
         }
         _ => {
-            *counts.entry("__ambiguous".to_string()).or_insert(0.0) += 1.0;
+            *counts.get_mut("__ambiguous").unwrap() += 1.0;
             match args.nonunique.as_str() {
                 "all" => {
                     for feature_name in &unique_feature_names {
-                        *counts.entry(feature_name.clone()).or_insert(0.0) += 1.0;
+                        *counts.get_mut(feature_name.as_str()).unwrap() += 1.0;
                     }
                 }
                 "fraction" => {
@@ -729,13 +696,13 @@ fn assign_overlaps(
                 "random" => {
                     let random_index = rand::random_range(0..feature_name_len);
                     let feature_name = unique_feature_names[random_index].clone();
-                    *counts.entry(feature_name).or_insert(0.0) += 1.0;
+                    *counts.get_mut(feature_name.as_str()).unwrap() += 1.0;
                 }
                 _ => {}
             }
 
             unique_feature_names.sort();
-            _ = sender.send(FeatureType::Ambiguous(unique_feature_names.join("+")));
+            if let Some(sender) = sender { let _ = sender.send(FeatureType::Ambiguous(unique_feature_names.join("+"))); }
         }
     }
 }
@@ -746,7 +713,7 @@ fn count_single_record(
     counts: &mut HashMap<String, f64>,
     args: &Args,
     gtf: &[Option<IntervalTree>],
-    sender: &mpsc::Sender<FeatureType>,
+    sender: Option<&mpsc::Sender<FeatureType>>,
 ) {
     *counter += 1;
     if *counter % 100000 == 0 {
@@ -759,8 +726,8 @@ fn count_single_record(
 
     let mut overlapping_features = Vec::with_capacity(3);
     if !add_record_blocks(record, false, gtf, &mut overlapping_features, args) {
-        *counts.entry("__no_feature".to_string()).or_insert(0.0) += 1.0;
-        _ = sender.send(FeatureType::NoFeature);
+        *counts.get_mut("__no_feature").unwrap() += 1.0;
+        if let Some(sender) = sender { let _ = sender.send(FeatureType::NoFeature); }
         return;
     }
 
@@ -819,14 +786,14 @@ fn should_skip_pair(
     second: Option<&bam::Record>,
     counts: &mut HashMap<String, f64>,
     args: &Args,
-    sender: &mpsc::Sender<FeatureType>,
+    sender: Option<&mpsc::Sender<FeatureType>>,
 ) -> bool {
     let first_mapped = first.map(|r| r.flag().is_mapped()).unwrap_or(false);
     let second_mapped = second.map(|r| r.flag().is_mapped()).unwrap_or(false);
 
     if !first_mapped && !second_mapped {
-        *counts.entry("__not_aligned".to_string()).or_insert(0.0) += 1.0;
-        _ = sender.send(FeatureType::NotAligned);
+        *counts.get_mut("__not_aligned").unwrap() += 1.0;
+        if let Some(sender) = sender { let _ = sender.send(FeatureType::NotAligned); }
         return true;
     }
 
@@ -834,7 +801,7 @@ fn should_skip_pair(
         && (first.map(|r| r.flag().is_secondary()).unwrap_or(false)
             || second.map(|r| r.flag().is_secondary()).unwrap_or(false))
     {
-        _ = sender.send(FeatureType::None);
+        if let Some(sender) = sender { let _ = sender.send(FeatureType::None); }
         return true;
     }
 
@@ -842,7 +809,7 @@ fn should_skip_pair(
         && (first.map(|r| r.flag().is_supplementary()).unwrap_or(false)
             || second.map(|r| r.flag().is_supplementary()).unwrap_or(false))
     {
-        _ = sender.send(FeatureType::None);
+        if let Some(sender) = sender { let _ = sender.send(FeatureType::None); }
         return true;
     }
 
@@ -852,7 +819,7 @@ fn should_skip_pair(
             .entry("__alignment_not_unique".to_string())
             .or_insert(0.0) += 1.0;
         if args.nonunique == "none" {
-            _ = sender.send(FeatureType::AlignmentNotUnique);
+            if let Some(sender) = sender { let _ = sender.send(FeatureType::AlignmentNotUnique); }
             return true;
         }
     }
@@ -860,8 +827,8 @@ fn should_skip_pair(
     let low_quality = first.map(|r| r.mapq() < args.a).unwrap_or(false)
         || second.map(|r| r.mapq() < args.a).unwrap_or(false);
     if low_quality {
-        *counts.entry("__too_low_aQual".to_string()).or_insert(0.0) += 1.0;
-        _ = sender.send(FeatureType::TooLowaQual);
+        *counts.get_mut("__too_low_aQual").unwrap() += 1.0;
+        if let Some(sender) = sender { let _ = sender.send(FeatureType::TooLowaQual); }
         return true;
     }
 
@@ -875,7 +842,7 @@ fn count_pair(
     counts: &mut HashMap<String, f64>,
     args: &Args,
     gtf: &[Option<IntervalTree>],
-    sender: &mpsc::Sender<FeatureType>,
+    sender: Option<&mpsc::Sender<FeatureType>>,
 ) {
     *counter += 1;
     if *counter % 100000 == 0 {
@@ -911,8 +878,8 @@ fn count_pair(
     }
 
     if !all_chromosomes_known {
-        *counts.entry("__no_feature".to_string()).or_insert(0.0) += 1.0;
-        _ = sender.send(FeatureType::NoFeature);
+        *counts.get_mut("__no_feature").unwrap() += 1.0;
+        if let Some(sender) = sender { let _ = sender.send(FeatureType::NoFeature); }
         return;
     }
 
@@ -949,7 +916,7 @@ fn process_name_group(
     counts: &mut HashMap<String, f64>,
     args: &Args,
     gtf: &[Option<IntervalTree>],
-    sender: &mpsc::Sender<FeatureType>,
+    sender: Option<&mpsc::Sender<FeatureType>>,
 ) {
     while let Some(record) = group.pop_front() {
         let mate_index = group
@@ -988,7 +955,7 @@ fn count_paired_name_sorted(
     counts: &mut HashMap<String, f64>,
     args: &Args,
     gtf: &[Option<IntervalTree>],
-    sender: &mpsc::Sender<FeatureType>,
+    sender: Option<&mpsc::Sender<FeatureType>>,
 ) {
     let mut current_name: Option<Vec<u8>> = None;
     let mut group = VecDeque::new();
@@ -1066,7 +1033,7 @@ fn count_paired_position_sorted(
     counts: &mut HashMap<String, f64>,
     args: &Args,
     gtf: &[Option<IntervalTree>],
-    sender: &mpsc::Sender<FeatureType>,
+    sender: Option<&mpsc::Sender<FeatureType>>,
 ) {
     let mut buffer: HashMap<MateKey, VecDeque<bam::Record>> = HashMap::new();
 
@@ -1166,18 +1133,22 @@ fn count_reads(
     counts: &mut HashMap<String, f64>,
     args: &Args,
     gtf: Vec<Option<IntervalTree>>,
-    sender: mpsc::Sender<FeatureType>,
+    sender: Option<&mpsc::Sender<FeatureType>>,
 ) {
-    let first_record = match reads_reader.next() {
-        Some(Ok(record)) => record,
-        Some(Err(e)) => panic!("{}", e),
-        None => {
+    // RecordReader::read_into reuses the record's internal buffers. The bam
+    // crate specifically exposes this path to avoid allocating a new Record
+    // for every alignment.
+    let mut record = bam::Record::new();
+    match reads_reader.read_into(&mut record) {
+        Ok(true) => {}
+        Ok(false) => {
             eprintln!("0 records processed.");
             return;
         }
-    };
+        Err(e) => panic!("{}", e),
+    }
 
-    if first_record.flag().is_paired() {
+    if record.flag().is_paired() {
         if args.output_sam.is_some() {
             panic!(
                 "--samout is not yet supported for paired-end input. \
@@ -1188,48 +1159,45 @@ fn count_reads(
         match args.order.as_str() {
             "name" => count_paired_name_sorted(
                 reads_reader,
-                first_record,
+                record,
                 counter,
                 counts,
                 args,
                 &gtf,
-                &sender,
+                sender,
             ),
             "pos" => count_paired_position_sorted(
                 reads_reader,
-                first_record,
+                record,
                 counter,
                 counts,
                 args,
                 &gtf,
-                &sender,
+                sender,
             ),
             _ => unreachable!(),
         }
         eprintln!("{} read pairs processed.", counter);
     } else {
-        count_single_record(
-            &first_record,
-            counter,
-            counts,
-            args,
-            &gtf,
-            &sender,
-        );
-
-        for result in reads_reader.by_ref() {
-            let record = result.unwrap_or_else(|e| panic!("{}", e));
+        loop {
             if record.flag().is_paired() {
                 panic!("Mixed single-end and paired-end records are not supported");
             }
+
             count_single_record(
                 &record,
                 counter,
                 counts,
                 args,
                 &gtf,
-                &sender,
+                sender,
             );
+
+            match reads_reader.read_into(&mut record) {
+                Ok(true) => {}
+                Ok(false) => break,
+                Err(e) => panic!("{}", e),
+            }
         }
         eprintln!("{} records processed.", counter);
     }
