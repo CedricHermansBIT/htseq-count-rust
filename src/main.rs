@@ -88,13 +88,15 @@ fn main() {
     // }
 
     
-    if args.export_feature_tree.is_some() {
-        eprintln!("Exporting feature trees as dot files...");
-        let mut file = File::create(args.export_feature_tree.clone().unwrap()).expect("Unable to create file");
+    // DOT export is deliberately opt-in. Normal counting does no export I/O
+    // and does not clone the interval tree.
+    if let Some(export_path) = args.export_feature_tree.as_deref() {
+        eprintln!("Exporting feature tree to {}...", export_path);
+        let mut file = File::create(export_path).expect("Unable to create feature-tree DOT file");
         for (chr, tree) in gtf.iter().enumerate().take(reference_names.len()) {
             if let Some(tree) = tree {
                 if let Some(top_node) = &tree.top_node {
-                    let _ = top_node.clone().write_structure(&mut file, 0, reference_names[chr].clone());
+                    let _ = top_node.write_structure(&mut file, 0, &reference_names[chr]);
                 }
             }
         }
@@ -353,8 +355,10 @@ struct Args {
     // Export feature map
     #[arg(
         short = 'f',
-        long = "export_feature_map",
-        help = "Filename to output the feature map for debugging purposes."
+        long = "export-feature-tree",
+        visible_alias = "export_feature_map",
+        value_name = "DOT",
+        help = "Optional: export the annotation feature tree as a Graphviz DOT file. Disabled by default because export can be slow on large annotations."
     )]
     export_feature_tree: Option<String>,
 
