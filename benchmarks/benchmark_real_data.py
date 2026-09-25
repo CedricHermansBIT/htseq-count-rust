@@ -100,6 +100,10 @@ class Measurement:
     wall_seconds: float
     max_rss_kib: int
     exit_code: int
+    gtf_parse_seconds: float | None = None
+    index_build_seconds: float | None = None
+    annotation_total_seconds: float | None = None
+    counting_seconds: float | None = None
 
 
 def scenario_matrix(profile: str) -> list[Scenario]:
@@ -465,6 +469,24 @@ def exact_differences(a_path: Path, b_path: Path):
     return result
 
 
+def parse_phase_timings(path: Path) -> dict[str, float]:
+    timings: dict[str, float] = {}
+    prefixes = {
+        "__timing_gtf_parse_seconds": "gtf_parse_seconds",
+        "__timing_index_build_seconds": "index_build_seconds",
+        "__timing_annotation_total_seconds": "annotation_total_seconds",
+        "__timing_counting_seconds": "counting_seconds",
+    }
+    for line in path.read_text(errors="replace").splitlines():
+        for prefix, key in prefixes.items():
+            if line.startswith(prefix + "\t"):
+                try:
+                    timings[key] = float(line.split("\t", 1)[1])
+                except ValueError:
+                    pass
+    return timings
+
+
 def parse_time(path: Path):
     elapsed = rss = None
     with path.open() as fh:
@@ -501,13 +523,31 @@ def timed(
         str(timing),
         *command,
     ]
+    env = os.environ.copy()
+    if tool == "rust":
+        env["HTSEQ_COUNT_RUST_TIMINGS"] = "1"
+
     with out.open("w") as stdout, err.open("w") as stderr:
         p = subprocess.run(
-            wrapped, cwd=cwd, stdout=stdout, stderr=stderr, check=False
+            wrapped,
+            cwd=cwd,
+            stdout=stdout,
+            stderr=stderr,
+            check=False,
+            env=env,
         )
+
     elapsed, rss = parse_time(timing)
+    phases = parse_phase_timings(err) if tool == "rust" else {}
     return Measurement(
-        tool, dataset, scenario, repeat, elapsed, rss, p.returncode
+        tool=tool,
+        dataset=dataset,
+        scenario=scenario,
+        repeat=repeat,
+        wall_seconds=elapsed,
+        max_rss_kib=rss,
+        exit_code=p.returncode,
+        **phases,
     )
 
 
@@ -744,6 +784,13 @@ def main():
                         f"{m.wall_seconds:.3f}s, "
                         f"{m.max_rss_kib / 1024:.1f} MiB RSS"
                     )
+                    if tool == "rust" and m.annotation_total_seconds is not None:
+                        print(
+                            "    phases: "
+                            f"gtf_parse={m.gtf_parse_seconds:.3f}s, "
+                            f"index={m.index_build_seconds:.3f}s, "
+                            f"count={m.counting_seconds:.3f}s"
+                        )
                     if m.exit_code:
                         print(f"[FAIL] {tool} exited {m.exit_code}")
                         stderr_tail(err)
