@@ -91,29 +91,45 @@ The direct dependencies are kept at their current stable releases:
 
 ## Real-data benchmark
 
-A reproducible benchmark is available in `benchmarks/benchmark_real_data.py`. It downloads real paired-end Pasilla RNA-seq chromosome 4 BAM files and the matching Drosophila BDGP5.78 GTF from Zenodo record 61771, verifies the published MD5 checksums, then benchmarks this implementation against HTSeq with identical counting options.
+A reproducible real-data benchmark is available in `benchmarks/benchmark_real_data.py`. It downloads real paired-end Pasilla RNA-seq chromosome 4 BAM files and the matching Drosophila BDGP5.78 GTF from Zenodo record 61771, then verifies the published MD5 checksums.
 
-The benchmark treats count parity as a hard requirement. Feature IDs, special rows and numeric counts must be exactly equal. No tolerance is used. If even one count differs, the benchmark stops and reports the first differences instead of producing a successful performance report.
+The benchmark treats count parity as a hard requirement. Feature IDs, special rows and numeric counts must be exactly equal after normalizing row order. No numeric tolerance is used. If even one count differs, that scenario fails and no successful performance result is recorded for it.
 
-Run locally with:
+The default `full` profile runs 31 scenarios per dataset:
+
+- an 18-case core matrix covering single-end and paired-end input, all three overlap modes, and `no`, `yes`, and `reverse` strandedness;
+- targeted real-data cases for `--nonunique all` and `fraction`, MAPQ threshold changes, secondary/supplementary scoring, repeated feature types, repeated ID attributes, and paired `--order pos` versus `--order name`.
+
+The single-end BAM is generated reproducibly from mate 1 of the downloaded real paired-end BAM. Only pairing metadata is removed; the real alignment coordinates, CIGAR strings, MAPQ values, tags, strands and sequences are retained. A query-name sorted paired BAM is also generated automatically for the `--order name` case.
+
+`--nonunique random` is intentionally excluded from exact differential benchmarking because HTSeq and Rust use independent random-number generators, so ambiguous reads are not guaranteed to be assigned to the same feature even when both implementations are correct. Paired `--samout` is also excluded until paired SAM annotation is implemented.
+
+Run the full matrix locally with:
 
 ```bash
 python -m pip install HTSeq
-python benchmarks/benchmark_real_data.py --build --repeats 3
+python benchmarks/benchmark_real_data.py --build --profile full --repeats 1
+```
+
+For more stable timing numbers:
+
+```bash
+python benchmarks/benchmark_real_data.py --build --profile full --repeats 3
 ```
 
 To benchmark both included real BAMs:
 
 ```bash
-python benchmarks/benchmark_real_data.py --build \\
-  --dataset GSM461177 \\
-  --dataset GSM461178 \\
+python benchmarks/benchmark_real_data.py --build \
+  --profile full \
+  --dataset GSM461177 \
+  --dataset GSM461178 \
   --repeats 3
 ```
 
-Downloads are cached under `benchmarks/data`. Results are written as JSON and Markdown under `benchmarks/results`, including wall time, peak resident memory and the exact-parity result for every measured repeat. The script alternates which tool runs first between repeats to reduce systematic page-cache bias.
+Downloads and derived BAMs are cached under `benchmarks/data`. Results are written as JSON and Markdown under `benchmarks/results`, including per-scenario wall time, peak resident memory and exact-parity status. The script alternates which tool runs first between repeats to reduce systematic page-cache bias.
 
-There is also a manual GitHub Actions workflow named `Real-data benchmark`, so the same benchmark can be launched from the Actions tab without preparing the dataset locally.
+There is also a manual GitHub Actions workflow named `Real-data benchmark`. It exposes `core` and `full` profiles and can run either one or both source BAMs.
 
 ## Performance
 
