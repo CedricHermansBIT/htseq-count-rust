@@ -812,75 +812,76 @@ fn parse_i32_ascii(value: &[u8]) -> i32 {
     result
 }
 
+fn find_attribute_bytes<'a>(raw: &'a [u8], wanted: &[u8]) -> Option<&'a [u8]> {
+    let mut start = 0usize;
+    let mut in_quotes = false;
+
+    for index in 0..=raw.len() {
+        let at_end = index == raw.len();
+        if !at_end {
+            match raw[index] {
+                b'"' => in_quotes = !in_quotes,
+                b';' if !in_quotes => {}
+                _ => continue,
+            }
+        }
+
+        if !at_end && raw[index] != b';' {
+            continue;
+        }
+
+        let attr = trim_ascii(&raw[start..index]);
+        start = index.saturating_add(1);
+        if attr.is_empty() {
+            continue;
+        }
+
+        let Some(separator) = attr
+            .iter()
+            .position(|byte| byte.is_ascii_whitespace() || *byte == b'=')
+        else {
+            continue;
+        };
+
+        if &attr[..separator] != wanted {
+            continue;
+        }
+
+        let mut value = trim_ascii(&attr[separator + 1..]);
+        if value.len() >= 2 && value[0] == b'"' && value[value.len() - 1] == b'"' {
+            value = &value[1..value.len() - 1];
+        }
+        return Some(value);
+    }
+
+    if in_quotes {
+        panic!("GTF/GFF attribute string contains mismatched quotes");
+    }
+    None
+}
+
 fn parse_feature_id_bytes<'a>(
     raw: &'a [u8],
     id_attributes: &[String],
     line_number: usize,
 ) -> Cow<'a, str> {
     if id_attributes.len() == 1 {
-        let wanted = id_attributes[0].as_bytes();
-
-        for raw_attr in raw.split(|byte| *byte == b';') {
-            let attr = trim_ascii(raw_attr);
-            if attr.is_empty() {
-                continue;
-            }
-
-            let separator = attr
-                .iter()
-                .position(|byte| byte.is_ascii_whitespace() || *byte == b'=');
-            let Some(separator) = separator else {
-                continue;
-            };
-
-            if &attr[..separator] == wanted {
-                let mut value = trim_ascii(&attr[separator + 1..]);
-                if value.len() >= 2 && value[0] == b'"' && value[value.len() - 1] == b'"' {
-                    value = &value[1..value.len() - 1];
-                }
-                return Cow::Borrowed(
-                    std::str::from_utf8(value)
-                        .expect("Feature ID is not valid UTF-8")
-                );
-            }
-        }
-
-        panic!(
-            "Feature on line {} does not contain a '{}' attribute",
-            line_number,
-            id_attributes[0]
+        let wanted = &id_attributes[0];
+        let value = find_attribute_bytes(raw, wanted.as_bytes()).unwrap_or_else(|| {
+            panic!(
+                "Feature on line {} does not contain a '{}' attribute",
+                line_number,
+                wanted
+            )
+        });
+        return Cow::Borrowed(
+            std::str::from_utf8(value).expect("Feature ID is not valid UTF-8"),
         );
-    }
-
-    let mut values: Vec<Option<&[u8]>> = vec![None; id_attributes.len()];
-    for raw_attr in raw.split(|byte| *byte == b';') {
-        let attr = trim_ascii(raw_attr);
-        if attr.is_empty() {
-            continue;
-        }
-
-        let separator = attr
-            .iter()
-            .position(|byte| byte.is_ascii_whitespace() || *byte == b'=');
-        let Some(separator) = separator else {
-            continue;
-        };
-        let key = &attr[..separator];
-        let mut value = trim_ascii(&attr[separator + 1..]);
-        if value.len() >= 2 && value[0] == b'"' && value[value.len() - 1] == b'"' {
-            value = &value[1..value.len() - 1];
-        }
-
-        for (index, wanted) in id_attributes.iter().enumerate() {
-            if key == wanted.as_bytes() {
-                values[index] = Some(value);
-            }
-        }
     }
 
     let mut joined = String::new();
     for (index, wanted) in id_attributes.iter().enumerate() {
-        let value = values[index].unwrap_or_else(|| {
+        let value = find_attribute_bytes(raw, wanted.as_bytes()).unwrap_or_else(|| {
             panic!(
                 "Feature on line {} does not contain a '{}' attribute",
                 line_number,
@@ -891,7 +892,7 @@ fn parse_feature_id_bytes<'a>(
             joined.push(':');
         }
         joined.push_str(
-            std::str::from_utf8(value).expect("Feature ID is not valid UTF-8")
+            std::str::from_utf8(value).expect("Feature ID is not valid UTF-8"),
         );
     }
     Cow::Owned(joined)
@@ -904,25 +905,9 @@ struct FeatureMetadata {
 }
 
 fn attribute_value<'a>(raw: &'a [u8], wanted: &str) -> Option<&'a str> {
-    let wanted = wanted.as_bytes();
-    for raw_attr in raw.split(|byte| *byte == b';') {
-        let attr = trim_ascii(raw_attr);
-        if attr.is_empty() {
-            continue;
-        }
-        let separator = attr
-            .iter()
-            .position(|byte| byte.is_ascii_whitespace() || *byte == b'=')?;
-        if &attr[..separator] != wanted {
-            continue;
-        }
-        let mut value = trim_ascii(&attr[separator + 1..]);
-        if value.len() >= 2 && value[0] == b'"' && value[value.len() - 1] == b'"' {
-            value = &value[1..value.len() - 1];
-        }
-        return Some(std::str::from_utf8(value).expect("Feature attribute is not valid UTF-8"));
-    }
-    None
+    find_attribute_bytes(raw, wanted.as_bytes()).map(|value| {
+        std::str::from_utf8(value).expect("Feature attribute is not valid UTF-8")
+    })
 }
 
 fn parse_feature_query(query: Option<&str>) -> Option<(String, String)> {
