@@ -1,4 +1,3 @@
-use ahash::AHashMap as HashMap;
 use bam::record::tags::TagValue;
 use bam::{RecordReader,BamReader, RecordWriter, SamReader, SamWriter};
 use feature::Feature;
@@ -6,7 +5,7 @@ use intervaltree::IntervalTree;
 use interval::Interval;
 use std::borrow::Cow;
 use std::cmp::{max, min};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 use std::sync::{mpsc, Arc};
