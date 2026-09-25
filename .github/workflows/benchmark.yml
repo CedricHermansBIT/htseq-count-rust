@@ -51,7 +51,7 @@ jobs:
           REPEATS="${{ github.event_name == 'push' && '1' || inputs.repeats }}"
           PROFILE="${{ github.event_name == 'push' && 'full' || inputs.profile }}"
           python benchmarks/benchmark_real_data.py \
-            --rust-bin target/release/htseq_count_rust \
+            --rust-bin target/release/tallyseq \
             --profile "$PROFILE" \
             --repeats "$REPEATS"
 
@@ -59,7 +59,7 @@ jobs:
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.both_datasets }}
         run: |
           python benchmarks/benchmark_real_data.py \
-            --rust-bin target/release/htseq_count_rust \
+            --rust-bin target/release/tallyseq \
             --profile "${{ inputs.profile }}" \
             --dataset GSM461177 \
             --dataset GSM461178 \
