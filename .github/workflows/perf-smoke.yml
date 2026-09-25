@@ -1,0 +1,44 @@
+name: Performance smoke
+
+on:
+  push:
+    branches:
+      - diagnostics
+    paths:
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/perf-smoke.yml"
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install HTSeq
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install HTSeq
+
+      - name: Build Rust release
+        run: cargo build --release --locked
+
+      - name: Benchmark paired union smoke case
+        run: |
+          python benchmarks/benchmark_real_data.py \
+            --rust-bin target/release/htseq_count_rust \
+            --scenario paired_union_no \
+            --repeats 3
+
+      - name: Upload benchmark report
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-smoke
+          path: |
+            benchmarks/results/real_data_benchmark.json
+            benchmarks/results/real_data_benchmark.md
