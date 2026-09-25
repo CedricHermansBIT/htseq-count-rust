@@ -1,6 +1,6 @@
-use rust_htslib::bam::{self as htsbam, Format, Header, Read, Reader, Writer};
+use rust_htslib::bam::{Format, Header, Read, Reader, Writer};
 use std::path::{Path, PathBuf};
-use tempfile::{NamedTempFile, TempPath};
+use tempfile::TempPath;
 
 pub struct PreparedAlignment {
     path: PathBuf,
