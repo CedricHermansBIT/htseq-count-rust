@@ -9,7 +9,7 @@ pub struct Node {
     pub x_center: i32,
     pub max_end_left: i32,
     pub max_end_right: i32,
-    pub s_center: HashSet<Interval>,
+    pub s_center: Vec<Interval>,
     left_node: Option<Box<Node>>,
     right_node: Option<Box<Node>>,
     pub depth: i32,
@@ -17,7 +17,7 @@ pub struct Node {
 }
 
 impl Node {
-    pub fn new(x_center: i32, s_center: HashSet<Interval>) -> Self {
+    pub fn new(x_center: i32, s_center: Vec<Interval>) -> Self {
         Node {
             x_center,
             max_end_left: 0,
@@ -35,7 +35,7 @@ impl Node {
             x_center: 0,
             max_end_left: 0,
             max_end_right: 0,
-            s_center: HashSet::new(),
+            s_center: Vec::new(),
             left_node: None,
             right_node: None,
             depth: 0,
@@ -44,9 +44,7 @@ impl Node {
     }
 
     pub fn from_interval(interval: Interval) -> Self {
-        let mut s_center = HashSet::new();
-        s_center.insert(interval.clone());
-        Node::new(interval.start, s_center)
+        Node::new(interval.start, vec![interval])
     }
 
     pub fn from_intervals(intervals: HashSet<Interval>) -> Option<Box<Node>> {
@@ -72,10 +70,10 @@ impl Node {
         // tree. Build from slices so we do not allocate and clone left/right
         // vectors at every recursion level.
         let mid = intervals.len() / 2;
-        let mut s_center = HashSet::with_capacity(1);
-        s_center.insert(intervals[mid].clone());
-
-        let mut node = Node::new(intervals[mid].start, s_center);
+        let mut node = Node::new(
+            intervals[mid].start,
+            vec![intervals[mid].clone()],
+        );
         node.left_node = Node::from_sorted_slice(&intervals[..mid]);
         node.right_node = Node::from_sorted_slice(&intervals[mid + 1..]);
         node.refresh_balance();
@@ -148,7 +146,9 @@ impl Node {
 
     pub fn add(&mut self, interval: Interval) -> &mut Self {
         if self.center_hit(&interval) {
-            self.s_center.insert(interval);
+            if !self.s_center.contains(&interval) {
+                self.s_center.push(interval);
+            }
         } else {
             let direction = self.hit_branch(&interval);
             match direction {
@@ -182,7 +182,9 @@ impl Node {
 
     pub fn remove_interval_helper(&mut self, interval: Interval, should_raise_error: bool) -> Result<&mut Self, &'static str> {
         if self.center_hit(&interval) {
-            if !self.s_center.remove(&interval) && should_raise_error {
+            let old_len = self.s_center.len();
+            self.s_center.retain(|existing| existing != &interval);
+            if old_len == self.s_center.len() && should_raise_error {
                 return Err("Interval not found");
             }
             if self.s_center.is_empty() {
