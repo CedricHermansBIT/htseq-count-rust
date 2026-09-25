@@ -1,31 +1,106 @@
+name: Release packaging
+
 on:
+  push:
+    branches:
+      - diagnostics
+    paths:
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/main.yml"
+  workflow_dispatch:
   release:
     types: [created]
-  push:
 
+permissions:
+  contents: write
 
 jobs:
-  release:
-    name: release ${{ matrix.target }} (with non-required env)
-    runs-on: ubuntu-latest
-    if: github.event_name == 'release'
+  unix:
+    name: Package ${{ matrix.label }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - target: x86_64-pc-windows-gnu
-            archive: zip
-          - target: x86_64-unknown-linux-musl
-            archive: tar.gz
-          - target: x86_64-apple-darwin
-            archive: zip
+          - runner: ubuntu-24.04
+            label: linux-x86_64
+          - runner: ubuntu-24.04-arm
+            label: linux-arm64
+          - runner: macos-15-intel
+            label: macos-x86_64
+          - runner: macos-15
+            label: macos-arm64
+    runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@master
-      - name: Compile and release
-        uses: rust-build/rust-build.action@master
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/checkout@v4
+
+      - name: Build release
+        run: cargo build --release --locked
+
+      - name: Smoke test
+        run: ./target/release/tallyseq --version
+
+      - name: Package TallySeq and compatibility command
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp target/release/tallyseq dist/tallyseq
+          cp target/release/tallyseq dist/htseq-count
+          archive="TallySeq-${{ matrix.label }}.tar.gz"
+          tar -C dist -czf "$archive" tallyseq htseq-count
+          echo "ARCHIVE=$archive" >> "$GITHUB_ENV"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
         with:
-          RUSTTARGET: ${{ matrix.target }}
-          ARCHIVE_TYPES: ${{ matrix.archive }}
-          MINIFY: "yes"
+          name: TallySeq-${{ matrix.label }}
+          path: ${{ env.ARCHIVE }}
+          if-no-files-found: error
+
+      - name: Upload release asset
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" "$ARCHIVE" --clobber
+
+  windows:
+    name: Package windows-x86_64
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build release
+        shell: pwsh
+        env:
+          LIBCLANG_PATH: C:\Program Files\LLVM\bin
+        run: cargo build --release --locked
+
+      - name: Smoke test
+        shell: pwsh
+        run: .\target\release\tallyseq.exe --version
+
+      - name: Package TallySeq and compatibility command
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item target\release\tallyseq.exe dist\tallyseq.exe
+          Copy-Item target\release\tallyseq.exe dist\htseq-count.exe
+          $archive = "TallySeq-windows-x86_64.zip"
+          Compress-Archive -Path dist\tallyseq.exe,dist\htseq-count.exe -DestinationPath $archive -Force
+          "ARCHIVE=$archive" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TallySeq-windows-x86_64
+          path: ${{ env.ARCHIVE }}
+          if-no-files-found: error
+
+      - name: Upload release asset
+        if: github.event_name == 'release'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" "$env:ARCHIVE" --clobber
