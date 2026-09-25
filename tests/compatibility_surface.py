@@ -321,6 +321,15 @@ def test_tabular(repo, rust, htseq, root, gtf, sam1, sam2):
     )
     print("[ OK ] append output")
 
+    empty_gtf = root / "empty.gtf"
+    empty_gtf.write_text("")
+    rr = run([rust, "-s", "no", str(sam1), str(empty_gtf)], repo)
+    hr = run([htseq, "-s", "no", str(sam1), str(empty_gtf)], repo)
+    require_ok("Rust empty annotation", rr)
+    require_ok("HTSeq empty annotation", hr)
+    compare_tabular("empty annotation", rr.stdout, hr.stdout, 1)
+    print("[ OK ] empty annotation")
+
 
 def xf_rows(path, mode="r"):
     rows = []
@@ -402,6 +411,45 @@ def test_samout(repo, rust, htseq, root, gtf, sam1, sam2, paired):
     if xf_rows(rust_pos) != xf_rows(ht_pos):
         raise AssertionError("position-sorted paired XF assignments differ")
     print("[ OK ] position-sorted paired samout")
+
+    # stdin plus SAM annotation output.
+    rust_stdin = root / "rust_stdin.sam"
+    ht_stdin = root / "ht_stdin.sam"
+    sam_text = sam1.read_text()
+    rr = run([
+        rust, "-s", "no", "-o", rust_stdin, "-", gtf
+    ], repo, input_text=sam_text)
+    hr = run([
+        htseq, "-s", "no", "-o", ht_stdin, "-", gtf
+    ], repo, input_text=sam_text)
+    require_ok("Rust stdin samout", rr)
+    require_ok("HTSeq stdin samout", hr)
+    if xf_rows(rust_stdin) != xf_rows(ht_stdin):
+        raise AssertionError("stdin --samout XF assignments differ")
+    print("[ OK ] stdin samout")
+
+    # NH multimapper annotations under --nonunique all.
+    multi = root / "multimapper.sam"
+    multi.write_text(
+        "@HD\tVN:1.6\tSO:unsorted\n"
+        "@SQ\tSN:chr1\tLN:1000\n"
+        "multi1\t0\tchr1\t105\t60\t10M\t*\t0\t0\tAAAAAAAAAA\tIIIIIIIIII\tNH:i:2\n"
+    )
+    rust_multi = root / "rust_multi.sam"
+    ht_multi = root / "ht_multi.sam"
+    rr = run([
+        rust, "-s", "no", "--nonunique", "all",
+        "-o", rust_multi, multi, gtf
+    ], repo)
+    hr = run([
+        htseq, "-s", "no", "--nonunique", "all",
+        "-o", ht_multi, multi, gtf
+    ], repo)
+    require_ok("Rust multimapper samout", rr)
+    require_ok("HTSeq multimapper samout", hr)
+    if xf_rows(rust_multi) != xf_rows(ht_multi):
+        raise AssertionError("multimapper --samout XF assignments differ")
+    print("[ OK ] multimapper samout")
 
 
 def test_cram(repo, rust, htseq, root, gtf, sam1):
