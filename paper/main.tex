@@ -1,0 +1,130 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{authblk}
+\usepackage{booktabs}
+\usepackage{microtype}
+\usepackage{siunitx}
+\usepackage{hyperref}
+\usepackage{natbib}
+\usepackage{xcolor}
+
+\hypersetup{colorlinks=true,linkcolor=black,citecolor=black,urlcolor=blue}
+\input{benchmark_macros.tex}
+
+\title{TallySeq: a high-performance, HTSeq-compatible read counting tool in Rust}
+\author[1]{Cedric Hermans}
+\affil[1]{BIT\textsuperscript{2}lab, Howest University of Applied Sciences, Bruges, Belgium}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Read summarization against genomic annotations remains a routine step in bulk and single-cell sequencing workflows. \texttt{htseq-count} is widely used because its handling of strandedness, ambiguous overlaps, multimapping reads, paired-end fragments, and annotation attributes is well established, but its execution time can become substantial when many alignment files are processed. We present TallySeq, a Rust implementation designed to reproduce current \texttt{htseq-count} counting semantics while reducing runtime and memory use. TallySeq supports single- and paired-end SAM/BAM input, CRAM on Linux and macOS, the three HTSeq overlap modes, strandedness modes, nonunique-read handling, multi-file processing, annotation metadata, annotated SAM/BAM output, and tabular, Matrix Market, H5AD, and Loom count output. Correctness is assessed by differential tests against HTSeq 2.1.2, targeted interval and CIGAR edge cases, upstream HTSeq fixtures, and real-data scenarios. In a preliminary real-data benchmark using Drosophila Pasilla chromosome 4 alignments and the matching Ensembl annotation, all \BenchmarkExactScenarioCount{} of \BenchmarkScenarioCount{} benchmark scenarios produced exactly identical count tables. Median elapsed time was \SI{\MedianTallyTime}{\second} for TallySeq and \SI{\MedianHTSeqTime}{\second} for HTSeq, corresponding to a median \MedianSpeedup{}-fold speedup (range \MinimumSpeedup{}--\MaximumSpeedup{}). Median peak resident memory was \SI{\MedianTallyRSS}{\mebi\byte} and \SI{\MedianHTSeqRSS}{\mebi\byte}, respectively. These measurements are preliminary and will be replaced by repeated benchmarks on dedicated hardware before submission.
+\end{abstract}
+
+\section{Introduction}
+
+Assigning aligned sequencing reads or fragments to genomic features is conceptually simple but becomes complicated at exon boundaries, overlapping genes, splice junctions, multimapping alignments, paired-end fragments, and strand-specific protocols. HTSeq introduced a general Python framework for high-throughput sequencing data and the \texttt{htseq-count} command for gene-level read summarization \citep{Anders2015}. HTSeq 2.0 subsequently expanded \texttt{htseq-count} with multi-file processing, additional annotation metadata, sparse output representations, and modernized I/O and deployment \citep{Putri2022}.
+
+Other high-performance read summarizers exist, including featureCounts \citep{Liao2014}. TallySeq addresses a narrower compatibility goal: preserve the established command-line behavior and counting semantics of \texttt{htseq-count} while reducing the computational cost of workflows that already depend on those semantics. This makes performance improvements useful without requiring users to reinterpret differences caused by a different counting model.
+
+TallySeq is implemented in Rust and exposes both a \texttt{tallyseq} executable and an \texttt{htseq-count} compatibility executable in release archives. The implementation has been developed together with a differential test suite that compares counts and compatibility outputs against HTSeq 2.1.2.
+
+\section{Implementation}
+
+\subsection{Counting model}
+
+TallySeq reproduces the three HTSeq overlap modes: \texttt{union}, \texttt{intersection-strict}, and \texttt{intersection-nonempty}. It supports \texttt{yes}, \texttt{no}, and \texttt{reverse} strandedness; single- and paired-end alignments; name- and coordinate-sorted paired-end input; MAPQ filtering; handling of secondary and supplementary alignments; and the HTSeq \texttt{none}, \texttt{all}, \texttt{fraction}, and \texttt{random} policies for nonunique feature assignments.
+
+Alignment blocks are derived from reference-consuming CIGAR operations. Insertions and clipping do not advance reference coordinates, while deletions and skipped regions advance the reference without being counted as aligned blocks. Paired-end reads are summarized as fragments, consistent with the behavior described for \texttt{htseq-count} \citep{Anders2015}.
+
+\subsection{Annotation indexing}
+
+GTF/GFF annotation is parsed once per invocation. Feature names are interned and represented internally by integer identifiers, while chromosome-specific interval trees are immutable and shared between input files. A multi-file invocation therefore reuses the same annotation index instead of reparsing the GTF for every sample. This design mirrors the load-once motivation of HTSeq 2.0 multi-file counting \citep{Putri2022}, while allowing concurrent processing of alignment files.
+
+The interval query implementation performs a single pruned range traversal using subtree maximum-end coordinates. This avoids repeated point queries at annotation boundaries and eliminates a sort-and-deduplicate step that was present in an earlier implementation.
+
+\subsection{I/O and output compatibility}
+
+Local SAM and BAM files use a lightweight Rust reader on the normal counting path. On Linux and macOS, HTSlib is used as a compatibility bridge for CRAM, standard input, and content-based format conversion. The Windows build uses the Rust SAM/BAM path and does not currently support CRAM.
+
+TallySeq supports multiple alignment files, compressed GTF/GFF input, repeated feature types and ID attributes, annotation metadata columns, feature queries, and HTSeq-style annotated SAM/BAM output via the \texttt{XF} tag. Count output can be written as delimited text, Matrix Market, H5AD, or Loom. Release packages contain both the native \texttt{tallyseq} command and a compatibility copy named \texttt{htseq-count}.
+
+\section{Correctness validation}
+
+Correctness testing is differential by design. Generated SAM/GTF cases are executed with both TallySeq and HTSeq and the complete count tables are compared. The current suite contains 292 generated single- and paired-end cases, including fuzz-generated combinations of CIGAR operations, flags, MAPQ values, NH tags, overlap modes, and strandedness options. Fourteen additional adversarial interval cases exercise one-base features, adjacent and overlapping exons, deletions, splice gaps, clipping, and strand boundaries. Six scenarios derived from the upstream HTSeq reference fixtures are also compared.
+
+A separate compatibility suite covers multi-file counting, headers and append behavior, compressed annotations, GFF3 attributes, duplicate annotation attributes, feature queries, multiple ID attributes, CRAM, standard input, SAM/BAM annotation output, H5AD, Loom, and Matrix Market output. Real-data benchmark scenarios are accepted only when every feature row and every HTSeq special row has exactly the same numeric count. No numerical tolerance is used for the count comparison.
+
+\section{Benchmark design}
+
+The preliminary benchmark uses the Pasilla RNA-seq training data deposited in Zenodo record 61771 \citep{Gruning2016}. The benchmark downloads and checksum-verifies \texttt{GSM461177\_untreat\_paired\_chr4.bam} and \texttt{Drosophila\_melanogaster.BDGP5.78.gtf}. A single-end data set is reproducibly derived from mate 1 while retaining the original alignments, CIGAR strings, MAPQ values, sequence, strand, and auxiliary tags. A query-name-sorted paired BAM is generated for the name-order benchmark.
+
+Both tools are run with identical options. Wall-clock time and maximum resident set size are recorded with GNU \texttt{/usr/bin/time}. The full benchmark matrix contains 31 scenarios. The core matrix combines single- or paired-end input with all three overlap modes and all three strandedness modes. Targeted scenarios additionally test \texttt{--nonunique all}, \texttt{--nonunique fraction}, MAPQ threshold changes, scoring of secondary and supplementary alignments, repeated feature types, repeated ID attributes, and paired-end name sorting.
+
+The preliminary full-matrix measurements reported here were obtained on a GitHub-hosted Ubuntu runner from workflow run \BenchmarkRunId{} at TallySeq commit \texttt{\BenchmarkCommit}. Each full-matrix scenario was measured once. A separate three-repeat smoke benchmark for paired-end, union, unstranded counting measured TallySeq at \SI{0.46}{\second} in all three repeats and HTSeq at \SI{18.77}{\second}, \SI{19.13}{\second}, and \SI{19.00}{\second}. Before submission, the complete matrix will be repeated on dedicated hardware with fixed CPU and memory specifications and multiple independent repetitions.
+
+\section{Results}
+
+\subsection{Count parity}
+
+All 31 real-data benchmark scenarios produced exactly identical count tables between TallySeq and HTSeq 2.1.2. This includes the three overlap modes, three strandedness settings, both single- and paired-end processing, coordinate- and name-sorted paired-end input, multimapper policies, MAPQ changes, secondary/supplementary alignments, multiple feature types, and compound feature identifiers.
+
+\subsection{Runtime and memory}
+
+Across all 31 preliminary scenarios, the median runtime was \SI{\MedianTallyTime}{\second} for TallySeq and \SI{\MedianHTSeqTime}{\second} for HTSeq. The corresponding median speedup was \MedianSpeedup{}-fold, with individual scenarios ranging from \MinimumSpeedup{}-fold to \MaximumSpeedup{}-fold. Median peak resident memory was \SI{\MedianTallyRSS}{\mebi\byte} for TallySeq and \SI{\MedianHTSeqRSS}{\mebi\byte} for HTSeq, a \MedianMemoryRatio{}-fold ratio.
+
+\begin{table}[ht]
+\centering
+\caption{Representative preliminary real-data benchmark scenarios. All count tables were exactly identical. Times and peak RSS values are from one full-matrix CI run.}
+\label{tab:benchmark}
+\begin{tabular}{llrrrrr}
+\toprule
+Input & Mode / option & \multicolumn{2}{c}{Time (s)} & Speedup & \multicolumn{2}{c}{Peak RSS (MiB)} \\
+\cmidrule(lr){3-4}\cmidrule(lr){6-7}
+ & & TallySeq & HTSeq & $\times$ & TallySeq & HTSeq \\
+\midrule
+Single & union, unstranded & 0.35 & 17.56 & 50.17 & 25.6 & 66.0 \\
+Single & intersection-strict & 0.35 & 17.40 & 49.71 & 25.3 & 66.1 \\
+Single & intersection-nonempty & 0.36 & 17.75 & 49.31 & 25.5 & 66.0 \\
+Paired & union, unstranded & 0.43 & 18.62 & 43.30 & 28.7 & 72.6 \\
+Paired & intersection-strict & 0.43 & 18.77 & 43.65 & 28.7 & 72.5 \\
+Paired & intersection-nonempty & 0.43 & 18.70 & 43.49 & 29.5 & 72.7 \\
+Paired & name-sorted union & 0.41 & 18.65 & 45.49 & 25.6 & 66.1 \\
+Paired & gene + transcript ID & 0.60 & 18.81 & 31.35 & 53.6 & 89.2 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The lowest speedup in the matrix occurred when counting paired-end reads with a compound \texttt{gene\_id:transcript\_id} identifier. That scenario also increased memory use in both implementations because the annotation expanded from 15,687 output rows to 29,178 rows. Even in this case, TallySeq completed in \SI{0.60}{\second} compared with \SI{18.81}{\second} for HTSeq.
+
+\section{Discussion}
+
+The preliminary results indicate that a compatibility-oriented reimplementation can substantially reduce the runtime of \texttt{htseq-count} without changing its count output. Several implementation choices contribute to this difference: integer feature identifiers in the hot path, immutable shared annotation indices, a single-pass interval range query, reusable alignment record buffers, reduced temporary string allocation, and avoiding diagnostic output machinery unless it is requested.
+
+The compatibility goal distinguishes TallySeq from read summarizers that intentionally implement different defaults or assignment models. Users with existing HTSeq-based pipelines can therefore evaluate TallySeq by direct count-table comparison rather than by accepting a new quantification definition.
+
+The current benchmark is deliberately limited in scope. The Pasilla chromosome 4 data are small enough to make repeated CI testing practical, which is valuable for regression detection but does not establish scaling behavior on whole-genome, deeply sequenced human data. The final manuscript should therefore add larger real BAM/CRAM data sets, controlled hardware, repeated measurements, and scaling experiments across read count, annotation size, and number of samples. A comparison with featureCounts would also provide useful context, although exact count equality is not expected because the tools do not expose identical semantics for every option.
+
+\section{Limitations}
+
+TallySeq aims to reproduce \texttt{htseq-count}, not the complete HTSeq Python API. CRAM input is currently unavailable in the native Windows package because the Unix compatibility bridge depends on HTSlib. The \texttt{--nonunique random} mode is implemented, but exact differential comparison of individual ambiguous-read assignments is not meaningful because TallySeq and HTSeq use independent random-number generators. The benchmark measurements in this draft were collected on ephemeral CI hardware and should be treated as preliminary performance evidence.
+
+\section{Availability}
+
+TallySeq source code, benchmark scripts, differential tests, and release packaging are available at \url{https://github.com/CedricHermansBIT/TallySeq}. The repository includes a reproducible real-data benchmark that downloads and checksum-verifies its input data, rejects any benchmark run with unequal counts, and reports wall-clock time and peak resident memory.
+
+\section{Author contributions}
+
+Cedric Hermans: conceptualization, software, methodology, validation, benchmarking, and writing of the initial manuscript draft.
+
+\section{Competing interests}
+
+The author declares no competing interests.
+
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\end{document}
