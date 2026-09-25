@@ -371,8 +371,38 @@ fn prepare_count_hashmap(gtf: &Vec<Option<IntervalTree>>) -> HashMap<String, f64
     counts
 }
 
-fn parse_feature_attributes(raw: &str) -> HashMap<String, String> {
-    let mut result = HashMap::new();
+fn parse_feature_id(raw: &str, id_attributes: &[String], line_number: usize) -> String {
+    // The common case is one ID attribute. Scan the attribute field directly
+    // instead of allocating a HashMap<String, String> for every GTF row.
+    if id_attributes.len() == 1 {
+        let wanted = id_attributes[0].as_str();
+        let mut found: Option<&str> = None;
+
+        for raw_attr in raw.split(';') {
+            let attr = raw_attr.trim();
+            if attr.is_empty() {
+                continue;
+            }
+
+            let mut parts = attr.splitn(2, |c: char| c.is_whitespace() || c == '=');
+            let key = parts.next().unwrap_or("").trim();
+            if key == wanted {
+                found = Some(parts.next().unwrap_or("").trim().trim_matches('"'));
+            }
+        }
+
+        return found
+            .unwrap_or_else(|| {
+                panic!(
+                    "Feature on line {} does not contain a '{}' attribute",
+                    line_number,
+                    wanted
+                )
+            })
+            .to_string();
+    }
+
+    let mut values: Vec<Option<&str>> = vec![None; id_attributes.len()];
     for raw_attr in raw.split(';') {
         let attr = raw_attr.trim();
         if attr.is_empty() {
@@ -382,11 +412,29 @@ fn parse_feature_attributes(raw: &str) -> HashMap<String, String> {
         let mut parts = attr.splitn(2, |c: char| c.is_whitespace() || c == '=');
         let key = parts.next().unwrap_or("").trim();
         let value = parts.next().unwrap_or("").trim().trim_matches('"');
-        if !key.is_empty() {
-            result.insert(key.to_string(), value.to_string());
+
+        for (index, wanted) in id_attributes.iter().enumerate() {
+            if key == wanted {
+                values[index] = Some(value);
+            }
         }
     }
-    result
+
+    let mut joined = String::new();
+    for (index, wanted) in id_attributes.iter().enumerate() {
+        let value = values[index].unwrap_or_else(|| {
+            panic!(
+                "Feature on line {} does not contain a '{}' attribute",
+                line_number,
+                wanted
+            )
+        });
+        if index != 0 {
+            joined.push(':');
+        }
+        joined.push_str(value);
+    }
+    joined
 }
 
 fn read_gtf(file_path: &str, feature_type_filter: &[String], ref_names_to_id: &HashMap<String, i32>, args: &Args) -> Vec<Option<IntervalTree>> {
@@ -410,21 +458,41 @@ fn read_gtf(file_path: &str, feature_type_filter: &[String], ref_names_to_id: &H
             continue;
         }
 
-        let fields: Vec<&str> = line.trim_end_matches(['\r', '\n']).split('\t').collect();
-        if fields.len() != 9 {
+        let mut fields = line.trim_end_matches(['\r', '\n']).split('\t');
+        let chr_name = fields.next();
+        let _source = fields.next();
+        let feature_type = fields.next();
+        let start_field = fields.next();
+        let end_field = fields.next();
+        let _score = fields.next();
+        let strand_field = fields.next();
+        let _frame = fields.next();
+        let attributes = fields.next();
+
+        if chr_name.is_none()
+            || feature_type.is_none()
+            || start_field.is_none()
+            || end_field.is_none()
+            || strand_field.is_none()
+            || attributes.is_none()
+            || fields.next().is_some()
+        {
             panic!(
-                "Invalid GTF/GFF line {}: expected 9 tab-separated fields, found {}",
-                counter,
-                fields.len()
+                "Invalid GTF/GFF line {}: expected 9 tab-separated fields",
+                counter
             );
         }
 
-        if !feature_type_filter.iter().any(|feature_type| feature_type == fields[2]) {
+        let chr_name = chr_name.unwrap();
+        let feature_type = feature_type.unwrap();
+        if !feature_type_filter
+            .iter()
+            .any(|wanted_type| wanted_type == feature_type)
+        {
             line.clear();
             continue;
         }
 
-        let chr_name = fields[0];
         let chr_id = match chromosome_ids.get(chr_name) {
             Some(id) => *id,
             None => {
@@ -435,9 +503,9 @@ fn read_gtf(file_path: &str, feature_type_filter: &[String], ref_names_to_id: &H
             }
         };
 
-        let start = fields[3].parse::<i32>().unwrap();
-        let end = fields[4].parse::<i32>().unwrap();
-        let strand = fields[6].chars().next().unwrap_or('.');
+        let start = start_field.unwrap().parse::<i32>().unwrap();
+        let end = end_field.unwrap().parse::<i32>().unwrap();
+        let strand = strand_field.unwrap().chars().next().unwrap_or('.');
 
         if args.stranded != "no" && strand != '+' && strand != '-' {
             panic!(
@@ -447,19 +515,7 @@ fn read_gtf(file_path: &str, feature_type_filter: &[String], ref_names_to_id: &H
             );
         }
 
-        let parsed_attributes = parse_feature_attributes(fields[8]);
-        let mut id_values = Vec::with_capacity(args.i.len());
-        for attribute in &args.i {
-            match parsed_attributes.get(attribute) {
-                Some(value) => id_values.push(value.clone()),
-                None => panic!(
-                    "Feature on line {} does not contain a '{}' attribute",
-                    counter,
-                    attribute
-                ),
-            }
-        }
-        let name = id_values.join(":");
+        let name = parse_feature_id(attributes.unwrap(), &args.i, counter);
 
         let feature = Feature::new(
             name,
