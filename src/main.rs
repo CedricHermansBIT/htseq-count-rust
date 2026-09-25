@@ -403,50 +403,90 @@ impl Counts {
     }
 }
 
-fn parse_feature_id(raw: &str, id_attributes: &[String], line_number: usize) -> String {
-    // The common case is one ID attribute. Scan the attribute field directly
-    // instead of allocating a HashMap<String, String> for every GTF row.
-    if id_attributes.len() == 1 {
-        let wanted = id_attributes[0].as_str();
-        let mut found: Option<&str> = None;
+fn trim_ascii(mut value: &[u8]) -> &[u8] {
+    while value.first().map(|b| b.is_ascii_whitespace()).unwrap_or(false) {
+        value = &value[1..];
+    }
+    while value.last().map(|b| b.is_ascii_whitespace()).unwrap_or(false) {
+        value = &value[..value.len() - 1];
+    }
+    value
+}
 
-        for raw_attr in raw.split(';') {
-            let attr = raw_attr.trim();
+#[inline]
+fn parse_i32_ascii(value: &[u8]) -> i32 {
+    let mut result = 0i32;
+    for &byte in value {
+        if !byte.is_ascii_digit() {
+            panic!("Invalid integer field in GTF/GFF");
+        }
+        result = result
+            .checked_mul(10)
+            .and_then(|v| v.checked_add((byte - b'0') as i32))
+            .expect("GTF/GFF coordinate exceeds i32 range");
+    }
+    result
+}
+
+fn parse_feature_id_bytes(
+    raw: &[u8],
+    id_attributes: &[String],
+    line_number: usize,
+) -> String {
+    if id_attributes.len() == 1 {
+        let wanted = id_attributes[0].as_bytes();
+
+        for raw_attr in raw.split(|byte| *byte == b';') {
+            let attr = trim_ascii(raw_attr);
             if attr.is_empty() {
                 continue;
             }
 
-            let mut parts = attr.splitn(2, |c: char| c.is_whitespace() || c == '=');
-            let key = parts.next().unwrap_or("").trim();
-            if key == wanted {
-                found = Some(parts.next().unwrap_or("").trim().trim_matches('"'));
+            let separator = attr
+                .iter()
+                .position(|byte| byte.is_ascii_whitespace() || *byte == b'=');
+            let Some(separator) = separator else {
+                continue;
+            };
+
+            if &attr[..separator] == wanted {
+                let mut value = trim_ascii(&attr[separator + 1..]);
+                if value.len() >= 2 && value[0] == b'"' && value[value.len() - 1] == b'"' {
+                    value = &value[1..value.len() - 1];
+                }
+                return String::from_utf8(value.to_vec())
+                    .expect("Feature ID is not valid UTF-8");
             }
         }
 
-        return found
-            .unwrap_or_else(|| {
-                panic!(
-                    "Feature on line {} does not contain a '{}' attribute",
-                    line_number,
-                    wanted
-                )
-            })
-            .to_string();
+        panic!(
+            "Feature on line {} does not contain a '{}' attribute",
+            line_number,
+            id_attributes[0]
+        );
     }
 
-    let mut values: Vec<Option<&str>> = vec![None; id_attributes.len()];
-    for raw_attr in raw.split(';') {
-        let attr = raw_attr.trim();
+    let mut values: Vec<Option<&[u8]>> = vec![None; id_attributes.len()];
+    for raw_attr in raw.split(|byte| *byte == b';') {
+        let attr = trim_ascii(raw_attr);
         if attr.is_empty() {
             continue;
         }
 
-        let mut parts = attr.splitn(2, |c: char| c.is_whitespace() || c == '=');
-        let key = parts.next().unwrap_or("").trim();
-        let value = parts.next().unwrap_or("").trim().trim_matches('"');
+        let separator = attr
+            .iter()
+            .position(|byte| byte.is_ascii_whitespace() || *byte == b'=');
+        let Some(separator) = separator else {
+            continue;
+        };
+        let key = &attr[..separator];
+        let mut value = trim_ascii(&attr[separator + 1..]);
+        if value.len() >= 2 && value[0] == b'"' && value[value.len() - 1] == b'"' {
+            value = &value[1..value.len() - 1];
+        }
 
         for (index, wanted) in id_attributes.iter().enumerate() {
-            if key == wanted {
+            if key == wanted.as_bytes() {
                 values[index] = Some(value);
             }
         }
@@ -464,7 +504,9 @@ fn parse_feature_id(raw: &str, id_attributes: &[String], line_number: usize) -> 
         if index != 0 {
             joined.push(':');
         }
-        joined.push_str(value);
+        joined.push_str(
+            std::str::from_utf8(value).expect("Feature ID is not valid UTF-8")
+        );
     }
     joined
 }
@@ -483,26 +525,30 @@ fn read_gtf(
     // read syscalls, while reusing a preallocated line avoids early growth.
     let mut reader = BufReader::with_capacity(1024 * 1024, file);
     let mut counter = 0;
-    let mut line = String::with_capacity(512);
+    let mut line: Vec<u8> = Vec::with_capacity(512);
 
     let mut chromosome_ids = ref_names_to_id.clone();
     let mut next_chr_id = chromosome_ids.len() as i32;
     let mut feature_ids: HashMap<String, usize> = HashMap::new();
     let mut feature_names: Vec<String> = Vec::new();
 
-    while reader.read_line(&mut line).unwrap() > 0 {
+    while reader.read_until(b'\n', &mut line).unwrap() > 0 {
         counter += 1;
         if counter % 100000 == 0 {
             eprintln!("{} GFF lines processed.", counter);
         }
 
-        if line.starts_with('#') || line.trim().is_empty() {
+        while matches!(line.last(), Some(b'\n' | b'\r')) {
+            line.pop();
+        }
+
+        if line.is_empty() || line[0] == b'#' {
             line.clear();
             continue;
         }
 
-        let mut fields = line.trim_end_matches(['\r', '\n']).split('\t');
-        let chr_name = fields.next();
+        let mut fields = line.split(|byte| *byte == b'\t');
+        let chr_field = fields.next();
         let _source = fields.next();
         let feature_type = fields.next();
         let start_field = fields.next();
@@ -512,7 +558,7 @@ fn read_gtf(
         let _frame = fields.next();
         let attributes = fields.next();
 
-        if chr_name.is_none()
+        if chr_field.is_none()
             || feature_type.is_none()
             || start_field.is_none()
             || end_field.is_none()
@@ -526,16 +572,17 @@ fn read_gtf(
             );
         }
 
-        let chr_name = chr_name.unwrap();
         let feature_type = feature_type.unwrap();
         if !feature_type_filter
             .iter()
-            .any(|wanted_type| wanted_type == feature_type)
+            .any(|wanted_type| wanted_type.as_bytes() == feature_type)
         {
             line.clear();
             continue;
         }
 
+        let chr_name = std::str::from_utf8(chr_field.unwrap())
+            .expect("GTF/GFF chromosome name is not valid UTF-8");
         let chr_id = match chromosome_ids.get(chr_name) {
             Some(id) => *id,
             None => {
@@ -546,9 +593,13 @@ fn read_gtf(
             }
         };
 
-        let start = start_field.unwrap().parse::<i32>().unwrap();
-        let end = end_field.unwrap().parse::<i32>().unwrap();
-        let strand = strand_field.unwrap().chars().next().unwrap_or('.');
+        let start = parse_i32_ascii(start_field.unwrap());
+        let end = parse_i32_ascii(end_field.unwrap());
+        let strand = strand_field
+            .unwrap()
+            .first()
+            .copied()
+            .unwrap_or(b'.') as char;
 
         if args.stranded != "no" && strand != '+' && strand != '-' {
             panic!(
@@ -558,7 +609,7 @@ fn read_gtf(
             );
         }
 
-        let name = parse_feature_id(attributes.unwrap(), &args.i, counter);
+        let name = parse_feature_id_bytes(attributes.unwrap(), &args.i, counter);
         let feature_id = if let Some(id) = feature_ids.get(name.as_str()) {
             *id
         } else {
