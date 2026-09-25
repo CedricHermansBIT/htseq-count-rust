@@ -35,23 +35,23 @@ fn main() {
 
     // Try to open the bam file, if it fails, print an error message
     let mut reads_reader = ReadsReader::from_path(args.bam.clone(), args.n);
-    let header = reads_reader.header().clone();
-    // check if the header is valid
-    check_header_validity(&header, &args);
+    // Borrow the input header for normal setup. Only clone it when --samout is
+    // explicitly requested, because the writer thread then needs its own copy.
+    check_header_validity(reads_reader.header(), &args);
 
-    let reference_names: Vec<String> = header.reference_names().to_owned();
+    let reference_names: Vec<String> = reads_reader.header().reference_names().to_owned();
     let ref_names_to_id: HashMap<String, i32> = reference_names.iter().enumerate().map(|(i, s)| (s.clone(), i as i32)).collect();
-    
-    // Only create the assignment channel when --samout is actually used.
-    // The old code sent one message per record to a thread that simply discarded
-    // it during normal counting, which added synchronization overhead to the hot path.
-    let output_sam = args.output_sam.clone();
-    let input_reads = args.bam.clone();
+
+    // --samout is diagnostic/compatibility output and is completely opt-in.
+    // Normal counting does not create a channel, second reader, writer thread,
+    // or cloned BAM header/path for this feature.
     let reader_threads = args.n;
-    let (assignment_sender, writer_thread) = if let Some(output_sam) = output_sam {
+    let (assignment_sender, writer_thread) = if let Some(output_sam) = args.output_sam.clone() {
+        let input_reads = args.bam.clone();
+        let output_header = reads_reader.header().clone();
         let (sender, receiver) = mpsc::channel::<FeatureType>();
         let writer_thread = thread::spawn(move || {
-            let mut output_sam = SamWriter::from_path(output_sam, header)
+            let mut output_sam = SamWriter::from_path(output_sam, output_header)
                 .expect("Could not create output sam file");
             let mut bam = ReadsReader::from_path(input_reads, reader_threads);
             let mut record = bam::Record::new();
@@ -366,7 +366,7 @@ struct Args {
     #[arg(
         short = 'o',
         long = "samout",
-        help = "Create a SAM file with the reads and their features."
+        help = "Optional diagnostic output: write alignments to a SAM file with an XF feature-assignment tag. Disabled by default and not needed for counting."
     )]
     output_sam: Option<String>,
 }
