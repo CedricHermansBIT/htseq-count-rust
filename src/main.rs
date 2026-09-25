@@ -108,7 +108,6 @@ fn sanitize_repeated_options(args: &mut Args) {
     }
     dedup(&mut args.t);
     dedup(&mut args.i);
-    dedup(&mut args.additional_attributes);
 }
 
 fn count_one_alignment(
