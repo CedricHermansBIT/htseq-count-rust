@@ -27,7 +27,13 @@ use node::Node;
 struct RunResult {
     counts: Counts,
     counter: i32,
-    metadata: FeatureMetadata,
+    metadata: Arc<FeatureMetadata>,
+}
+
+struct SharedAnnotation {
+    trees_by_chrom: HashMap<String, Arc<IntervalTree>>,
+    feature_names: Arc<Vec<Arc<str>>>,
+    metadata: Arc<FeatureMetadata>,
 }
 
 fn main() {
@@ -750,7 +756,7 @@ struct Args {
 }
 
 struct Counts {
-    feature_names: Vec<Arc<str>>,
+    feature_names: Arc<Vec<Arc<str>>>,
     feature_counts: Vec<f64>,
     no_feature: f64,
     ambiguous: f64,
@@ -760,7 +766,7 @@ struct Counts {
 }
 
 impl Counts {
-    fn new(feature_names: Vec<Arc<str>>) -> Self {
+    fn new(feature_names: Arc<Vec<Arc<str>>>) -> Self {
         let feature_counts = vec![0.0; feature_names.len()];
         Counts {
             feature_names,
