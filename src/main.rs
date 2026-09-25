@@ -121,13 +121,15 @@ fn count_one_alignment(
     let mut args = base_args.clone();
     args.current_output_sam = samout;
 
+    // HTSeq keeps -f/--format only as a deprecated compatibility flag.
+    // Actual input detection is automatic.
     let prepared_alignment =
-        input::prepare_alignment(input_path, args.threads, &args.format)
+        input::prepare_alignment(input_path, args.threads, "auto")
             .unwrap_or_else(|e| panic!("{}", e));
     let effective_bam = prepared_alignment.path().to_string_lossy().to_string();
 
     let mut reads_reader =
-        ReadsReader::from_path(effective_bam.clone(), args.threads, &args.format);
+        ReadsReader::from_path(effective_bam.clone(), args.threads, "auto");
     check_header_validity(reads_reader.header(), input_path, &args);
 
     let reference_names: Vec<String> =
@@ -211,7 +213,7 @@ fn count_one_alignment(
 
 fn check_header_validity(header: &bam::Header, input_path: &str, args: &Args) {
     if header.lines().count() == 0 {
-        if args.format == "bam" || input_path.to_ascii_lowercase().ends_with(".bam") {
+        if input_path.to_ascii_lowercase().ends_with(".bam") {
             panic!("The BAM header is empty. The input file is likely invalid.");
         } else {
             panic!(
@@ -558,7 +560,7 @@ struct Args {
         long = "format",
         default_value = "auto",
         value_parser = ["sam", "bam", "auto"],
-        help = "Input alignment format: sam, bam, or auto. Kept for HTSeq CLI compatibility; auto detection is used for CRAM/stdin."
+        help = "Deprecated compatibility option. Accepted values: sam, bam, auto. Input format is detected automatically."
     )]
     format: String,
 
