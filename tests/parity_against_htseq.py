@@ -447,7 +447,7 @@ def paired_fuzz_cases(seed, count):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--rust-bin", default="target/release/htseq_count_rust")
+    ap.add_argument("--rust-bin", default="target/release/tallyseq")
     ap.add_argument("--htseq-bin", default="htseq-count")
     ap.add_argument("--build", action="store_true")
     ap.add_argument("--case", action="append", default=[])
