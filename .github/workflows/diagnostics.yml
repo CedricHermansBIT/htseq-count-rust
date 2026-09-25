@@ -3,6 +3,7 @@ name: Diagnostics parity
 on:
   push:
     branches:
+      - main
       - diagnostics
   workflow_dispatch:
 

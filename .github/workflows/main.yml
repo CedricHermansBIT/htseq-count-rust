@@ -3,6 +3,7 @@ name: Release packaging
 on:
   push:
     branches:
+      - main
       - diagnostics
     paths:
       - "src/**"

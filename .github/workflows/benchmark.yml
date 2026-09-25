@@ -3,6 +3,7 @@ name: Real-data benchmark
 on:
   push:
     branches:
+      - main
       - diagnostics
     paths:
       - "benchmarks/benchmark_real_data.py"

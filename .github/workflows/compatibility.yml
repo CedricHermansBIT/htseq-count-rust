@@ -3,6 +3,7 @@ name: HTSeq compatibility surface
 on:
   push:
     branches:
+      - main
       - diagnostics
     paths:
       - "src/**"
