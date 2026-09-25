@@ -358,7 +358,7 @@ fn write_loom(path: &str, table: &OutputTable) -> Result<(), String> {
         .write_vlen_strings("_index", &samples)
         .map_err(|e| e.to_string())?;
 
-    for group in ["layers", "row_graphs", "col_graphs"] {
+    for group in ["attrs", "layers", "row_graphs", "col_graphs"] {
         file.create_group(group).map_err(|e| e.to_string())?;
     }
 
