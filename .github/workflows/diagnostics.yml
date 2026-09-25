@@ -25,6 +25,13 @@ jobs:
       - name: Show reference version
         run: htseq-count --version
 
+      - name: Show latest direct dependency versions
+        run: |
+          cargo search structopt --limit 1
+          cargo search bam --limit 1
+          cargo search rand --limit 1
+          cargo search clap --limit 1
+
       - name: Build Rust release
         run: cargo build --release
 
