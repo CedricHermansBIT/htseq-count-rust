@@ -37,8 +37,8 @@ impl IntervalTree {
         intervals.sort_unstable_by(|a, b| {
             let af = a.data.as_ref().unwrap();
             let bf = b.data.as_ref().unwrap();
-            af.name()
-                .cmp(bf.name())
+            af.id()
+                .cmp(&bf.id())
                 .then(af.strand().cmp(&bf.strand()))
                 .then(a.start.cmp(&b.start))
                 .then(a.end.cmp(&b.end))
@@ -50,7 +50,7 @@ impl IntervalTree {
             let should_merge = merged.last().map(|last| {
                 let last_feature = last.data.as_ref().unwrap();
                 let feature = interval.data.as_ref().unwrap();
-                last_feature.name() == feature.name()
+                last_feature.id() == feature.id()
                     && last_feature.strand() == feature.strand()
                     && last.end >= interval.start.saturating_sub(1)
             }).unwrap_or(false);
