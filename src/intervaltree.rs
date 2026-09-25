@@ -27,9 +27,13 @@ impl IntervalTree {
             use std::collections::HashMap;
 
             // Create a HashMap where the keys are the names of the intervals and the values are vectors of intervals with that name.
-            let mut grouped_intervals: HashMap<String, Vec<Interval>> = HashMap::new();
+            let mut grouped_intervals: HashMap<(String, char), Vec<Interval>> = HashMap::new();
             for interval in &unique_intervals {
-                grouped_intervals.entry(interval.name().unwrap().to_string()).or_insert(Vec::new()).push(interval.clone());
+                let feature = interval.data.as_ref().unwrap();
+                grouped_intervals
+                    .entry((feature.name().to_string(), feature.strand()))
+                    .or_default()
+                    .push(interval.clone());
             }
 
             // For each name in the HashMap, sort the intervals by their start position and then merge the overlapping intervals.
