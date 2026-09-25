@@ -1346,46 +1346,85 @@ fn process_intersection_strict_read<'a>(
     add_stranded_features(new_contained, strand, overlapping_features, args);
 }
 
+fn sorted_unique_names<'a>(features: &[&'a Feature]) -> Vec<&'a str> {
+    let mut names: Vec<&'a str> = features
+        .iter()
+        .map(|feature| feature.name())
+        .filter(|name| !name.is_empty())
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    names
+}
+
 fn filter_ambiguity_union<'a>(
     overlapping_features: &[Vec<&'a Feature>],
 ) -> Vec<&'a str> {
-    let mut unique_feature_names: HashSet<&'a str> = HashSet::new();
+    let total_features: usize = overlapping_features.iter().map(Vec::len).sum();
+    let mut names = Vec::with_capacity(total_features);
     for feature in overlapping_features.iter().flatten() {
         let name = feature.name();
         if !name.is_empty() {
-            unique_feature_names.insert(name);
+            names.push(name);
         }
     }
-    unique_feature_names.into_iter().collect()
+    names.sort_unstable();
+    names.dedup();
+    names
+}
+
+fn intersect_sorted_names<'a>(
+    candidates: &mut Vec<&'a str>,
+    features: &[&'a Feature],
+) {
+    if candidates.is_empty() {
+        return;
+    }
+
+    let current = sorted_unique_names(features);
+    if current.is_empty() {
+        candidates.clear();
+        return;
+    }
+
+    let mut write = 0;
+    let mut i = 0;
+    let mut j = 0;
+    while i < candidates.len() && j < current.len() {
+        match candidates[i].cmp(current[j]) {
+            std::cmp::Ordering::Less => i += 1,
+            std::cmp::Ordering::Greater => j += 1,
+            std::cmp::Ordering::Equal => {
+                candidates[write] = candidates[i];
+                write += 1;
+                i += 1;
+                j += 1;
+            }
+        }
+    }
+    candidates.truncate(write);
 }
 
 fn filter_ambiguity_intersection_strict<'a>(
     overlapping_features: &[Vec<&'a Feature>],
 ) -> Vec<&'a str> {
-    if overlapping_features.iter().any(|features| features.is_empty()) {
-        return Vec::new();
-    }
+    let mut steps = overlapping_features.iter();
+    let first = match steps.next() {
+        Some(features) if !features.is_empty() => features,
+        _ => return Vec::new(),
+    };
 
-    let total = overlapping_features.len();
-    let mut feature_counts: HashMap<&'a str, usize> = HashMap::new();
-
-    for features in overlapping_features {
-        let mut names_in_step: HashSet<&'a str> = HashSet::new();
-        for feature in features {
-            let name = feature.name();
-            if !name.is_empty() {
-                names_in_step.insert(name);
-            }
+    let mut candidates = sorted_unique_names(first);
+    for features in steps {
+        if features.is_empty() {
+            return Vec::new();
         }
-        for name in names_in_step {
-            *feature_counts.entry(name).or_insert(0) += 1;
+        intersect_sorted_names(&mut candidates, features);
+        if candidates.is_empty() {
+            return candidates;
         }
     }
-
-    feature_counts
-        .into_iter()
-        .filter_map(|(name, count)| (count == total).then_some(name))
-        .collect()
+    candidates
 }
 
 fn filter_ambiguity_intersection_nonempty<'a>(
@@ -1400,22 +1439,14 @@ fn filter_ambiguity_intersection_nonempty<'a>(
         None => return Vec::new(),
     };
 
-    let mut feature_names: HashSet<&'a str> = first
-        .iter()
-        .map(|feature| feature.name())
-        .filter(|name| !name.is_empty())
-        .collect();
-
+    let mut candidates = sorted_unique_names(first);
     for features in nonempty_steps {
-        feature_names.retain(|name| {
-            features.iter().any(|feature| feature.name() == *name)
-        });
-        if feature_names.is_empty() {
-            return Vec::new();
+        intersect_sorted_names(&mut candidates, features);
+        if candidates.is_empty() {
+            return candidates;
         }
     }
-
-    feature_names.into_iter().collect()
+    candidates
 }
 
 fn feature_matches_strand(feature: &Feature, strand: char, args: &Args) -> bool {
