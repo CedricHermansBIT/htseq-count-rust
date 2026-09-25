@@ -108,9 +108,10 @@ impl Node {
             return Some(Box::new(self.clone()));
         }
         let my_heavy = self.balance > 0;
-        let child_heavy = match my_heavy {
-            true => self.right_node.as_ref()?.balance > 0,
-            false => self.left_node.as_ref()?.balance > 0,
+        let child_heavy = if my_heavy {
+            self.right_node.as_ref()?.balance > 0
+        } else {
+            self.left_node.as_ref()?.balance > 0
         };
         if my_heavy == child_heavy || self.right_node.as_ref()?.balance == 0 {
             self.srotate()
@@ -121,24 +122,27 @@ impl Node {
 
     pub fn srotate(&mut self) -> Option<Box<Node>> {
         let heavy = self.balance > 0;
-        let mut save = match heavy {
-            true => self.right_node.take(),
-            false => self.left_node.take(),
+        let mut save = if heavy {
+            self.right_node.take()
+        } else {
+            self.left_node.take()
         }?;
-        match heavy {
-            true => self.right_node = save.left_node.take(),
-            false => self.left_node = save.right_node.take(),
-        };
+        if heavy {
+            self.right_node = save.left_node.take();
+        } else {
+            self.left_node = save.right_node.take();
+        }
         save.rotate();  // Needed to ensure the 2 and 3 are balanced under new subnode
         Some(save)
     }
 
     pub fn drotate(&mut self) -> Option<Box<Node>> {
         let my_heavy = self.balance > 0;
-        match my_heavy {
-            true => self.right_node.as_mut()?.srotate(),
-            false => self.left_node.as_mut()?.srotate(),
-        };
+        if my_heavy {
+            self.right_node.as_mut()?.srotate();
+        } else {
+            self.left_node.as_mut()?.srotate();
+        }
         self.refresh_balance();
         self.srotate()
     }
@@ -151,21 +155,16 @@ impl Node {
             }
         } else {
             let direction = self.hit_branch(&interval);
-            match direction {
-                true => {
-                    if let Some(right_node) = &mut self.right_node {
-                        right_node.add(interval);
-                    } else {
-                        self.right_node = Some(Box::new(Node::from_interval(interval)));
-                    }
-                },
-                false => {
-                    if let Some(left_node) = &mut self.left_node {
-                        left_node.add(interval);
-                    } else {
-                        self.left_node = Some(Box::new(Node::from_interval(interval)));
-                    }
-                },
+            if direction {
+                if let Some(right_node) = &mut self.right_node {
+                    right_node.add(interval);
+                } else {
+                    self.right_node = Some(Box::new(Node::from_interval(interval)));
+                }
+            } else if let Some(left_node) = &mut self.left_node {
+                left_node.add(interval);
+            } else {
+                self.left_node = Some(Box::new(Node::from_interval(interval)));
             }
             self.refresh_balance();
         }
@@ -192,21 +191,16 @@ impl Node {
             }
         } else {
             let direction = self.hit_branch(&interval);
-            match direction {
-                true => {
-                    if let Some(right_node) = &mut self.right_node {
-                        right_node.remove_interval_helper(interval, should_raise_error)?;
-                    } else if should_raise_error {
-                        return Err("Interval not found");
-                    }
-                },
-                false => {
-                    if let Some(left_node) = &mut self.left_node {
-                        left_node.remove_interval_helper(interval, should_raise_error)?;
-                    } else if should_raise_error {
-                        return Err("Interval not found");
-                    }
-                },
+            if direction {
+                if let Some(right_node) = &mut self.right_node {
+                    right_node.remove_interval_helper(interval, should_raise_error)?;
+                } else if should_raise_error {
+                    return Err("Interval not found");
+                }
+            } else if let Some(left_node) = &mut self.left_node {
+                left_node.remove_interval_helper(interval, should_raise_error)?;
+            } else if should_raise_error {
+                return Err("Interval not found");
             }
             self.refresh_balance();
         }
