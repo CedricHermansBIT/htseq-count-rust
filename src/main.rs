@@ -465,6 +465,7 @@ fn read_gtf(file_path: &str, feature_type_filter: &[String], ref_names_to_id: &H
 
     let mut chromosome_ids = ref_names_to_id.clone();
     let mut next_chr_id = chromosome_ids.len() as i32;
+    let mut feature_ids: HashMap<String, usize> = HashMap::new();
 
     while reader.read_line(&mut line).unwrap() > 0 {
         counter += 1;
@@ -535,8 +536,16 @@ fn read_gtf(file_path: &str, feature_type_filter: &[String], ref_names_to_id: &H
         }
 
         let name = parse_feature_id(attributes.unwrap(), &args.i, counter);
+        let feature_id = if let Some(id) = feature_ids.get(name.as_str()) {
+            *id
+        } else {
+            let id = feature_ids.len();
+            feature_ids.insert(name.clone(), id);
+            id
+        };
 
         let feature = Feature::new(
+            feature_id,
             name,
             chr_id,
             min(start, end),
@@ -754,15 +763,15 @@ fn assign_overlaps(
 ) {
     // Keep references into the annotation instead of cloning Feature/String
     // values for every read.
-    let mut unique_feature_names = match args._m.as_str() {
+    let mut unique_features = match args._m.as_str() {
         "intersection-strict" => filter_ambiguity_intersection_strict(overlapping_features),
         "intersection-nonempty" => filter_ambiguity_intersection_nonempty(overlapping_features),
         "union" => filter_ambiguity_union(overlapping_features),
         _ => unreachable!(),
     };
-    let feature_name_len = unique_feature_names.len();
+    let feature_count = unique_features.len();
 
-    match feature_name_len {
+    match feature_count {
         0 => {
             *counts.get_mut("__no_feature").unwrap() += 1.0;
             if let Some(sender) = sender {
@@ -770,37 +779,41 @@ fn assign_overlaps(
             }
         }
         1 => {
-            let feature_name = unique_feature_names[0];
-            *counts.get_mut(feature_name).unwrap() += 1.0;
+            let feature = unique_features[0];
+            *counts.get_mut(feature.name()).unwrap() += 1.0;
             if let Some(sender) = sender {
-                let _ = sender.send(FeatureType::Name(feature_name.to_string()));
+                let _ = sender.send(FeatureType::Name(feature.name().to_string()));
             }
         }
         _ => {
             *counts.get_mut("__ambiguous").unwrap() += 1.0;
             match args.nonunique.as_str() {
                 "all" => {
-                    for feature_name in &unique_feature_names {
-                        *counts.get_mut(*feature_name).unwrap() += 1.0;
+                    for feature in &unique_features {
+                        *counts.get_mut(feature.name()).unwrap() += 1.0;
                     }
                 }
                 "fraction" => {
-                    let fractional_count = 1.0 / feature_name_len as f64;
-                    for feature_name in &unique_feature_names {
-                        *counts.get_mut(*feature_name).unwrap() += fractional_count;
+                    let fractional_count = 1.0 / feature_count as f64;
+                    for feature in &unique_features {
+                        *counts.get_mut(feature.name()).unwrap() += fractional_count;
                     }
                 }
                 "random" => {
-                    let random_index = rand::random_range(0..feature_name_len);
-                    let feature_name = unique_feature_names[random_index];
-                    *counts.get_mut(feature_name).unwrap() += 1.0;
+                    let random_index = rand::random_range(0..feature_count);
+                    let feature = unique_features[random_index];
+                    *counts.get_mut(feature.name()).unwrap() += 1.0;
                 }
                 _ => {}
             }
 
             if let Some(sender) = sender {
-                unique_feature_names.sort_unstable();
-                let _ = sender.send(FeatureType::Ambiguous(unique_feature_names.join("+")));
+                let mut names: Vec<&str> = unique_features
+                    .iter()
+                    .map(|feature| feature.name())
+                    .collect();
+                names.sort_unstable();
+                let _ = sender.send(FeatureType::Ambiguous(names.join("+")));
             }
         }
     }
@@ -1379,42 +1392,41 @@ fn process_intersection_strict_read<'a>(
     add_stranded_features(new_contained, strand, overlapping_features, args);
 }
 
-fn sorted_unique_names<'a>(features: &[&'a Feature]) -> Vec<&'a str> {
-    let mut names: Vec<&'a str> = features
+fn sorted_unique_features<'a>(features: &[&'a Feature]) -> Vec<&'a Feature> {
+    let mut unique: Vec<&'a Feature> = features
         .iter()
-        .map(|feature| feature.name())
-        .filter(|name| !name.is_empty())
+        .copied()
+        .filter(|feature| !feature.name().is_empty())
         .collect();
-    names.sort_unstable();
-    names.dedup();
-    names
+    unique.sort_unstable_by_key(|feature| feature.id());
+    unique.dedup_by_key(|feature| feature.id());
+    unique
 }
 
 fn filter_ambiguity_union<'a>(
     overlapping_features: &[Vec<&'a Feature>],
-) -> Vec<&'a str> {
+) -> Vec<&'a Feature> {
     let total_features: usize = overlapping_features.iter().map(Vec::len).sum();
-    let mut names = Vec::with_capacity(total_features);
+    let mut unique = Vec::with_capacity(total_features);
     for feature in overlapping_features.iter().flatten() {
-        let name = feature.name();
-        if !name.is_empty() {
-            names.push(name);
+        if !feature.name().is_empty() {
+            unique.push(*feature);
         }
     }
-    names.sort_unstable();
-    names.dedup();
-    names
+    unique.sort_unstable_by_key(|feature| feature.id());
+    unique.dedup_by_key(|feature| feature.id());
+    unique
 }
 
-fn intersect_sorted_names<'a>(
-    candidates: &mut Vec<&'a str>,
+fn intersect_sorted_features<'a>(
+    candidates: &mut Vec<&'a Feature>,
     features: &[&'a Feature],
 ) {
     if candidates.is_empty() {
         return;
     }
 
-    let current = sorted_unique_names(features);
+    let current = sorted_unique_features(features);
     if current.is_empty() {
         candidates.clear();
         return;
@@ -1424,7 +1436,7 @@ fn intersect_sorted_names<'a>(
     let mut i = 0;
     let mut j = 0;
     while i < candidates.len() && j < current.len() {
-        match candidates[i].cmp(current[j]) {
+        match candidates[i].id().cmp(&current[j].id()) {
             std::cmp::Ordering::Less => i += 1,
             std::cmp::Ordering::Greater => j += 1,
             std::cmp::Ordering::Equal => {
@@ -1440,19 +1452,19 @@ fn intersect_sorted_names<'a>(
 
 fn filter_ambiguity_intersection_strict<'a>(
     overlapping_features: &[Vec<&'a Feature>],
-) -> Vec<&'a str> {
+) -> Vec<&'a Feature> {
     let mut steps = overlapping_features.iter();
     let first = match steps.next() {
         Some(features) if !features.is_empty() => features,
         _ => return Vec::new(),
     };
 
-    let mut candidates = sorted_unique_names(first);
+    let mut candidates = sorted_unique_features(first);
     for features in steps {
         if features.is_empty() {
             return Vec::new();
         }
-        intersect_sorted_names(&mut candidates, features);
+        intersect_sorted_features(&mut candidates, features);
         if candidates.is_empty() {
             return candidates;
         }
@@ -1462,7 +1474,7 @@ fn filter_ambiguity_intersection_strict<'a>(
 
 fn filter_ambiguity_intersection_nonempty<'a>(
     overlapping_features: &[Vec<&'a Feature>],
-) -> Vec<&'a str> {
+) -> Vec<&'a Feature> {
     let mut nonempty_steps = overlapping_features
         .iter()
         .filter(|features| !features.is_empty());
@@ -1472,9 +1484,9 @@ fn filter_ambiguity_intersection_nonempty<'a>(
         None => return Vec::new(),
     };
 
-    let mut candidates = sorted_unique_names(first);
+    let mut candidates = sorted_unique_features(first);
     for features in nonempty_steps {
-        intersect_sorted_names(&mut candidates, features);
+        intersect_sorted_features(&mut candidates, features);
         if candidates.is_empty() {
             return candidates;
         }
