@@ -130,7 +130,7 @@ fn count_one_alignment(
 
     let mut reads_reader =
         ReadsReader::from_path(effective_bam.clone(), args.threads, "auto");
-    check_header_validity(reads_reader.header(), input_path, &args);
+    check_header_validity(reads_reader.header(), input_path);
 
     let reference_names: Vec<String> =
         reads_reader.header().reference_names().to_owned();
@@ -211,7 +211,7 @@ fn count_one_alignment(
     }
 }
 
-fn check_header_validity(header: &bam::Header, input_path: &str, args: &Args) {
+fn check_header_validity(header: &bam::Header, input_path: &str) {
     if header.lines().count() == 0 {
         if input_path.to_ascii_lowercase().ends_with(".bam") {
             panic!("The BAM header is empty. The input file is likely invalid.");
