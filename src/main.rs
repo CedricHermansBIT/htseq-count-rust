@@ -308,6 +308,7 @@ fn build_output_table(
     }
 
     output::OutputTable {
+        real_feature_count: sorted.len(),
         feature_ids,
         metadata_names: first.metadata.column_names.clone(),
         metadata_values,
