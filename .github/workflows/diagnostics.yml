@@ -28,6 +28,9 @@ jobs:
       - name: Build Rust release
         run: cargo build --release --locked
 
+      - name: Check benchmark script syntax
+        run: python -m py_compile benchmarks/benchmark_real_data.py
+
       - name: Run parity diagnostics
         run: python tests/parity_against_htseq.py --rust-bin target/release/htseq_count_rust --fuzz 150 --paired-fuzz 100
 
