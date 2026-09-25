@@ -962,9 +962,7 @@ fn read_gtf(
     while reader.read_until(b'\n', &mut line).unwrap() > 0 {
         counter += 1;
         if !args.quiet && counter % 100000 == 0 {
-            if !args.quiet {
-        eprintln!("{} GFF lines processed.", counter);
-    }
+            eprintln!("{} GFF lines processed.", counter);
         }
 
         while matches!(line.last(), Some(b'\n' | b'\r')) {
@@ -1091,7 +1089,9 @@ fn read_gtf(
         line.clear();
     }
 
-    eprintln!("{} GFF lines processed.", counter);
+    if !args.quiet {
+        eprintln!("{} GFF lines processed.", counter);
+    }
     if profile_timings {
         eprintln!(
             "__timing_gtf_parse_seconds\t{:.6}",
@@ -1801,7 +1801,9 @@ fn count_reads(
     match reads_reader.read_into(&mut record) {
         Ok(true) => {}
         Ok(false) => {
-            eprintln!("0 records processed.");
+            if !args.quiet {
+                eprintln!("0 records processed.");
+            }
             return;
         }
         Err(e) => panic!("{}", e),
@@ -1829,7 +1831,9 @@ fn count_reads(
             ),
             _ => unreachable!(),
         }
-        eprintln!("{} read pairs processed.", counter);
+        if !args.quiet {
+            eprintln!("{} read pairs processed.", counter);
+        }
     } else {
         loop {
             if record.flag().is_paired() {
@@ -1851,7 +1855,9 @@ fn count_reads(
                 Err(e) => panic!("{}", e),
             }
         }
-        eprintln!("{} records processed.", counter);
+        if !args.quiet {
+            eprintln!("{} records processed.", counter);
+        }
     }
 }
 
