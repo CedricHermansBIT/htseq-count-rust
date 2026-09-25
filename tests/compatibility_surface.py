@@ -137,6 +137,14 @@ def test_cli_compat(repo, rust, htseq, gtf, sam1):
     compare_tabular("deprecated -f", rr.stdout, hr.stdout, 1)
     print("[ OK ] deprecated format flag")
 
+    for threshold in ("-1", "300"):
+        rr = run([rust, "-s", "no", "-a", threshold, sam1, gtf], repo)
+        hr = run([htseq, "-s", "no", "-a", threshold, sam1, gtf], repo)
+        require_ok(f"Rust MAPQ {threshold}", rr)
+        require_ok(f"HTSeq MAPQ {threshold}", hr)
+        compare_tabular(f"MAPQ {threshold}", rr.stdout, hr.stdout, 1)
+    print("[ OK ] extended MAPQ thresholds")
+
     quiet = run([rust, "-q", "-s", "no", sam1, gtf], repo)
     require_ok("Rust quiet", quiet)
     noisy_fragments = ("GFF lines processed", "records processed", "Creating IntervalTree")
