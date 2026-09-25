@@ -206,6 +206,27 @@ def test_tabular(repo, rust, htseq, root, gtf, sam1, sam2):
             raise AssertionError(f"{label}: headers differ: {rh!r} != {hh!r}")
         print(f"[ OK ] {label}")
 
+    timing_env = os.environ.copy()
+    timing_env["HTSEQ_COUNT_RUST_TIMINGS"] = "1"
+    rr = run([
+        rust, "-s", "no", str(sam1), str(sam2), str(gtf)
+    ], repo, env=timing_env)
+    require_ok("Rust shared annotation timing", rr)
+    parse_markers = [
+        line for line in rr.stderr.splitlines()
+        if line.startswith("__timing_gtf_parse_seconds")
+    ]
+    index_markers = [
+        line for line in rr.stderr.splitlines()
+        if line.startswith("__timing_index_build_seconds")
+    ]
+    if len(parse_markers) != 1 or len(index_markers) != 1:
+        raise AssertionError(
+            "Annotation should be parsed and indexed exactly once for a multi-file run, "
+            f"got parse={len(parse_markers)} index={len(index_markers)}\n{rr.stderr}"
+        )
+    print("[ OK ] shared multi-file annotation index")
+
     gz = root / "features.gtf.gz"
     with gzip.open(gz, "wt") as out:
         out.write(gtf.read_text())
