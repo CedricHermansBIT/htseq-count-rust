@@ -20,6 +20,7 @@ mod intervaltree;
 mod interval;
 mod node;
 mod input;
+mod output;
 
 use node::Node;
 
@@ -247,25 +248,16 @@ fn write_count_results(results: &[RunResult], sample_names: &[String], args: &Ar
     }
 
     validate_result_layout(results);
-
-    if let Some(path) = args.counts_output.as_deref() {
-        let mut options = std::fs::OpenOptions::new();
-        options.create(true).write(true);
-        if args.append_output {
-            options.append(true);
-        } else {
-            options.truncate(true);
-        }
-        let file = options
-            .open(path)
-            .unwrap_or_else(|e| panic!("Could not open count output '{}': {}", path, e));
-        let mut writer = std::io::BufWriter::new(file);
-        write_tabular_counts(&mut writer, results, sample_names, args).unwrap();
-    } else {
-        let stdout = std::io::stdout();
-        let mut writer = stdout.lock();
-        write_tabular_counts(&mut writer, results, sample_names, args).unwrap();
-    }
+    let table = build_output_table(results, sample_names, args);
+    output::write_output(
+        &table,
+        args.counts_output.as_deref(),
+        &args.delimiter,
+        args.append_output,
+        args.with_header,
+        args.counts_output_sparse,
+    )
+    .unwrap_or_else(|e| panic!("Could not write count output: {}", e));
 }
 
 fn validate_result_layout(results: &[RunResult]) {
@@ -284,84 +276,66 @@ fn validate_result_layout(results: &[RunResult]) {
     }
 }
 
-fn write_tabular_counts<W: Write>(
-    writer: &mut W,
+fn build_output_table(
     results: &[RunResult],
     sample_names: &[String],
     args: &Args,
-) -> std::io::Result<()> {
+) -> output::OutputTable {
     let first = &results[0];
-    let metadata = &first.metadata;
-    let delimiter = &args.delimiter;
+    let sorted = sorted_feature_indices(&first.counts);
+    let mut feature_ids = Vec::with_capacity(sorted.len() + 6);
+    let mut metadata_values = Vec::with_capacity(sorted.len() + 6);
 
-    if args.with_header {
-        write!(writer, "{}", delimiter)?;
-        for _ in &metadata.column_names {
-            write!(writer, "{}", delimiter)?;
-        }
-        for (index, sample) in sample_names.iter().enumerate() {
-            if index != 0 {
-                write!(writer, "{}", delimiter)?;
-            }
-            write!(writer, "{}", sample)?;
-        }
-        writeln!(writer)?;
+    for &feature_id in &sorted {
+        feature_ids.push(first.counts.feature_names[feature_id].to_string());
+        metadata_values.push(
+            first
+                .metadata
+                .values
+                .get(feature_id)
+                .cloned()
+                .unwrap_or_else(|| vec![String::new(); first.metadata.column_names.len()]),
+        );
     }
 
-    for feature_id in sorted_feature_indices(&first.counts) {
-        write!(writer, "{}", first.counts.feature_names[feature_id])?;
-        if let Some(values) = metadata.values.get(feature_id) {
-            for value in values {
-                write!(writer, "{}{}", delimiter, value)?;
-            }
-        }
-        for result in results {
-            write!(
-                writer,
-                "{}{}",
-                delimiter,
-                result.counts.feature_counts[feature_id]
-            )?;
-        }
-        writeln!(writer)?;
-    }
-
-    let special_rows: [(&str, fn(&Counts) -> f64); 5] = [
-        ("__no_feature", |counts| counts.no_feature),
-        ("__ambiguous", |counts| counts.ambiguous),
-        ("__too_low_aQual", |counts| counts.too_low_aqual),
-        ("__not_aligned", |counts| counts.not_aligned),
-        ("__alignment_not_unique", |counts| counts.alignment_not_unique),
+    let special_names = [
+        "__no_feature",
+        "__ambiguous",
+        "__too_low_aQual",
+        "__not_aligned",
+        "__alignment_not_unique",
     ];
-
-    for (name, value) in special_rows {
-        write!(writer, "{}", name)?;
-        for _ in &metadata.column_names {
-            write!(writer, "{}", delimiter)?;
-        }
-        for result in results {
-            write!(writer, "{}{}", delimiter, value(&result.counts))?;
-        }
-        writeln!(writer)?;
+    for name in special_names {
+        feature_ids.push(name.to_string());
+        metadata_values.push(vec![String::new(); first.metadata.column_names.len()]);
     }
-
     if args.counts {
-        write!(writer, "Total number of uniquely mapped reads")?;
-        for _ in &metadata.column_names {
-            write!(writer, "{}", delimiter)?;
-        }
-        for result in results {
-            write!(
-                writer,
-                "{}{}",
-                delimiter,
-                result.counter as f64 - result.counts.special_total()
-            )?;
-        }
-        writeln!(writer)?;
+        feature_ids.push("Total number of uniquely mapped reads".to_string());
+        metadata_values.push(vec![String::new(); first.metadata.column_names.len()]);
     }
 
-    Ok(())
+    let mut values = Vec::with_capacity(results.len() * feature_ids.len());
+    for result in results {
+        for &feature_id in &sorted {
+            values.push(result.counts.feature_counts[feature_id]);
+        }
+        values.push(result.counts.no_feature);
+        values.push(result.counts.ambiguous);
+        values.push(result.counts.too_low_aqual);
+        values.push(result.counts.not_aligned);
+        values.push(result.counts.alignment_not_unique);
+        if args.counts {
+            values.push(result.counter as f64 - result.counts.special_total());
+        }
+    }
+
+    output::OutputTable {
+        feature_ids,
+        metadata_names: first.metadata.column_names.clone(),
+        metadata_values,
+        sample_names: sample_names.to_vec(),
+        values,
+    }
 }
 
 enum ReadsReader {
