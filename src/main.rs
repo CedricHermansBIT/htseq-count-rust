@@ -4,7 +4,7 @@ use feature::Feature;
 use intervaltree::IntervalTree;
 use interval::Interval;
 use std::cmp::{max, min};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 use std::sync::mpsc;
@@ -976,9 +976,7 @@ fn should_skip_pair(
 
     let multimapped = pair_is_multimapped_htseq_compatible(first, second);
     if multimapped {
-        *counts
-            .entry("__alignment_not_unique".to_string())
-            .or_insert(0.0) += 1.0;
+        counts.alignment_not_unique += 1.0;
         if args.nonunique == "none" {
             if let Some(sender) = sender { let _ = sender.send(FeatureType::AlignmentNotUnique); }
             return true;
