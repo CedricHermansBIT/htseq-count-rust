@@ -28,17 +28,20 @@ def paired_sam(name, flag, pos, mate_pos):
         "A" * n, "I" * n,
     ])
 
-def exon(start, end, gene, strand="+", gene_name=None, extra="", chrom="chr1"):
+def exon(start, end, gene, strand="+", gene_name=None, extra="", chrom="chr1", feature_type="exon"):
     gene_name = gene_name or f"{gene}_name"
     attrs = f'gene_id "{gene}"; gene_name "{gene_name}";'
     if extra:
         attrs += " " + extra
-    return f"{chrom}\tparity\texon\t{start}\t{end}\t.\t{strand}\t.\t{attrs}"
+    return f"{chrom}\tparity\t{feature_type}\t{start}\t{end}\t.\t{strand}\t.\t{attrs}"
 
 def opts(mode="union", nonunique="none", stranded="no", idattrs=("gene_id",),
-         secondary="ignore", supplementary="ignore", minaqual=10):
-    out = ["-s", stranded, "-t", "exon", "-m", mode, "-a", str(minaqual),
-           "--nonunique", nonunique]
+         secondary="ignore", supplementary="ignore", minaqual=10,
+         feature_types=("exon",)):
+    out = ["-s", stranded]
+    for feature_type in feature_types:
+        out += ["-t", feature_type]
+    out += ["-m", mode, "-a", str(minaqual), "--nonunique", nonunique]
     for attr in idattrs:
         out += ["-i", attr]
     if secondary is not None:
@@ -57,6 +60,11 @@ CASES = [
      [exon(100,104,"geneA"), exon(115,119,"geneA")],
      [sam("r1", cigar="5M10N5M")],
      opts()),
+
+    ("multiple_feature_types",
+     [exon(100,109,"geneA"), exon(120,129,"geneB", feature_type="pseudogene")],
+     [sam("r1", pos=100), sam("r2", pos=120)],
+     opts(feature_types=("exon", "pseudogene"))),
 
     ("eq_x_cigar",
      [exon(100,109,"geneA")],
