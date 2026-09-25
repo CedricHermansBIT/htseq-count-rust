@@ -63,7 +63,7 @@ pub fn write_output(
                         .map_err(|e| e.to_string())
                 }
                 "mtx" => write_mtx(path, table, sparse),
-                "h5ad" => write_h5ad(path, table),
+                "h5ad" => write_h5ad(path, table, sparse),
                 "loom" => write_loom(path, table),
                 other => Err(format!(
                     "Format not recognized for output count file: {other}"
@@ -194,22 +194,81 @@ fn write_string_array(
     Ok(dataset)
 }
 
-fn write_h5ad(path: &str, table: &OutputTable) -> Result<(), String> {
+fn write_h5ad(path: &str, table: &OutputTable, sparse: bool) -> Result<(), String> {
     let file = H5File::create(path).map_err(|e| e.to_string())?;
     file.set_attr_string("encoding-type", "anndata")
         .map_err(|e| e.to_string())?;
     file.set_attr_string("encoding-version", "0.1.0")
         .map_err(|e| e.to_string())?;
 
-    let matrix_f32: Vec<f32> = table.values.iter().map(|value| *value as f32).collect();
-    let x = file
-        .new_dataset::<f32>()
-        .shape(&[table.n_samples(), table.n_features()])
-        .create("X")
+    if sparse {
+        let mut data = Vec::<f32>::new();
+        let mut indices = Vec::<i32>::new();
+        let mut indptr = Vec::<i32>::with_capacity(table.n_samples() + 1);
+        indptr.push(0);
+
+        for sample in 0..table.n_samples() {
+            for feature in 0..table.n_features() {
+                let value = table.value(sample, feature);
+                if value != 0.0 {
+                    data.push(value as f32);
+                    indices.push(feature as i32);
+                }
+            }
+            indptr.push(data.len() as i32);
+        }
+
+        let x = file.create_group("X").map_err(|e| e.to_string())?;
+        x.set_attr_string("encoding-type", "csr_matrix")
+            .map_err(|e| e.to_string())?;
+        x.set_attr_string("encoding-version", "0.1.0")
+            .map_err(|e| e.to_string())?;
+        x.set_attr_array_numeric(
+            "shape",
+            &[table.n_samples() as i64, table.n_features() as i64],
+        )
         .map_err(|e| e.to_string())?;
-    x.write_raw(&matrix_f32).map_err(|e| e.to_string())?;
-    set_dataset_string_attr(&x, "encoding-type", "array")?;
-    set_dataset_string_attr(&x, "encoding-version", "0.2.0")?;
+
+        let data_ds = x
+            .new_dataset::<f32>()
+            .shape(&[data.len()])
+            .create("data")
+            .map_err(|e| e.to_string())?;
+        data_ds.write_raw(&data).map_err(|e| e.to_string())?;
+        set_dataset_string_attr(&data_ds, "encoding-type", "array")?;
+        set_dataset_string_attr(&data_ds, "encoding-version", "0.2.0")?;
+
+        let indices_ds = x
+            .new_dataset::<i32>()
+            .shape(&[indices.len()])
+            .create("indices")
+            .map_err(|e| e.to_string())?;
+        indices_ds
+            .write_raw(&indices)
+            .map_err(|e| e.to_string())?;
+        set_dataset_string_attr(&indices_ds, "encoding-type", "array")?;
+        set_dataset_string_attr(&indices_ds, "encoding-version", "0.2.0")?;
+
+        let indptr_ds = x
+            .new_dataset::<i32>()
+            .shape(&[indptr.len()])
+            .create("indptr")
+            .map_err(|e| e.to_string())?;
+        indptr_ds.write_raw(&indptr).map_err(|e| e.to_string())?;
+        set_dataset_string_attr(&indptr_ds, "encoding-type", "array")?;
+        set_dataset_string_attr(&indptr_ds, "encoding-version", "0.2.0")?;
+    } else {
+        let matrix_f32: Vec<f32> =
+            table.values.iter().map(|value| *value as f32).collect();
+        let x = file
+            .new_dataset::<f32>()
+            .shape(&[table.n_samples(), table.n_features()])
+            .create("X")
+            .map_err(|e| e.to_string())?;
+        x.write_raw(&matrix_f32).map_err(|e| e.to_string())?;
+        set_dataset_string_attr(&x, "encoding-type", "array")?;
+        set_dataset_string_attr(&x, "encoding-version", "0.2.0")?;
+    }
 
     let obs = file.create_group("obs").map_err(|e| e.to_string())?;
     obs.set_attr_string("_index", "_index")
@@ -225,7 +284,8 @@ fn write_h5ad(path: &str, table: &OutputTable) -> Result<(), String> {
     let var = file.create_group("var").map_err(|e| e.to_string())?;
     var.set_attr_string("_index", "_index")
         .map_err(|e| e.to_string())?;
-    let metadata_refs: Vec<&str> = table.metadata_names.iter().map(String::as_str).collect();
+    let metadata_refs: Vec<&str> =
+        table.metadata_names.iter().map(String::as_str).collect();
     var.set_attr_string_array("column-order", &metadata_refs)
         .map_err(|e| e.to_string())?;
     var.set_attr_string("encoding-type", "dataframe")
