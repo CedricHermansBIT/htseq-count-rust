@@ -1,4 +1,4 @@
-use rust_hdf5::{H5Dataset, H5File, VarLenUnicode};
+use rust_hdf5::{H5Dataset, H5File, HBool, VarLenUnicode};
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::path::Path;
@@ -196,6 +196,61 @@ fn write_string_array(
     Ok(dataset)
 }
 
+fn write_categorical_metadata(
+    group: &rust_hdf5::H5Group,
+    name: &str,
+    values: &[String],
+    valid_count: usize,
+) -> Result<(), String> {
+    use std::collections::BTreeSet;
+
+    let categories: Vec<String> = values
+        .iter()
+        .take(valid_count)
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+
+    let category_index: std::collections::HashMap<&str, i32> = categories
+        .iter()
+        .enumerate()
+        .map(|(index, value)| (value.as_str(), index as i32))
+        .collect();
+
+    let mut codes = Vec::with_capacity(values.len());
+    for (index, value) in values.iter().enumerate() {
+        if index >= valid_count {
+            codes.push(-1);
+        } else {
+            codes.push(*category_index.get(value.as_str()).unwrap());
+        }
+    }
+
+    let categorical = group.create_group(name).map_err(|e| e.to_string())?;
+    categorical
+        .set_attr_string("encoding-type", "categorical")
+        .map_err(|e| e.to_string())?;
+    categorical
+        .set_attr_string("encoding-version", "0.2.0")
+        .map_err(|e| e.to_string())?;
+    categorical
+        .set_attr_numeric("ordered", &HBool::from(false))
+        .map_err(|e| e.to_string())?;
+
+    write_string_array(&categorical, "categories", &categories)?;
+
+    let codes_ds = categorical
+        .new_dataset::<i32>()
+        .shape(&[codes.len()])
+        .create("codes")
+        .map_err(|e| e.to_string())?;
+    codes_ds.write_raw(&codes).map_err(|e| e.to_string())?;
+    set_dataset_string_attr(&codes_ds, "encoding-type", "array")?;
+    set_dataset_string_attr(&codes_ds, "encoding-version", "0.2.0")?;
+    Ok(())
+}
+
 fn write_h5ad(path: &str, table: &OutputTable, sparse: bool) -> Result<(), String> {
     let file = H5File::create(path).map_err(|e| e.to_string())?;
     file.set_attr_string("encoding-type", "anndata")
@@ -301,7 +356,16 @@ fn write_h5ad(path: &str, table: &OutputTable, sparse: bool) -> Result<(), Strin
             .iter()
             .map(|row| row.get(column).cloned().unwrap_or_default())
             .collect();
-        write_string_array(&var, name, &values)?;
+        // HTSeq builds a pandas DataFrame whose metadata columns are shorter
+        // than the ID column by the five special __... rows. AnnData's default
+        // writer converts these string columns to categoricals and represents
+        // the missing special-row values using categorical code -1.
+        write_categorical_metadata(
+            &var,
+            name,
+            &values,
+            table.real_feature_count,
+        )?;
     }
 
     for name in ["obsm", "varm", "obsp", "varp", "layers", "uns"] {
