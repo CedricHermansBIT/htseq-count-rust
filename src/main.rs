@@ -562,7 +562,7 @@ struct Args {
         value_parser = ["sam", "bam", "auto"],
         help = "Deprecated compatibility option. Accepted values: sam, bam, auto. Input format is detected automatically."
     )]
-    format: String,
+    _format: String,
 
     // Mode
     #[arg(short = 'm', long = "mode", default_value = "union", value_parser = ["intersection-strict", "intersection-nonempty", "union"], help = "Mode to use for counting reads overlapping features. Possible values: intersection-strict, intersection-nonempty, union (default: union).")]
@@ -598,7 +598,6 @@ struct Args {
     t: Vec<String>,
 
     // Feature ID
-    // TODO: implement actual logic for this option
     #[arg(
         short = 'i',
         long = "idattr",
