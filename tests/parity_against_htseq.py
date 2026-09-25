@@ -2,6 +2,7 @@
 import argparse
 import math
 import re
+import random
 import shutil
 import subprocess
 import tempfile
@@ -186,12 +187,67 @@ def delta(a, b):
             if a.get(k) is None or b.get(k) is None
             or not math.isclose(a[k], b[k], rel_tol=1e-9, abs_tol=1e-9)]
 
+def random_cigar(rng):
+    # All are valid single-end CIGARs. They deliberately mix operations that
+    # consume reference, query, both, or neither.
+    choices = [
+        "1M", "5M", "10M", "3M2N4M", "4M1D5M", "2I8M",
+        "3S7M", "5=1X4=", "2M1I3M2D4M", "1S3M4N2M1I2M",
+    ]
+    return rng.choice(choices)
+
+def fuzz_cases(seed, count):
+    rng = random.Random(seed)
+    generated = []
+    modes = ["union", "intersection-strict", "intersection-nonempty"]
+    stranded_values = ["no", "yes", "reverse"]
+    nonunique_values = ["none", "all", "fraction"]
+
+    for idx in range(count):
+        gtfs = []
+        gene_count = rng.randint(1, 4)
+        for gi in range(gene_count):
+            gene = f"gene{gi}"
+            strand = rng.choice(["+", "-"])
+            exon_count = rng.randint(1, 3)
+            for _ in range(exon_count):
+                start = rng.randint(85, 135)
+                length = rng.randint(1, 20)
+                gtfs.append(exon(start, start + length - 1, gene, strand=strand))
+
+        cigar = random_cigar(rng)
+        pos = rng.randint(90, 130)
+        flag = 16 if rng.choice([False, True]) else 0
+        mapq = rng.choice([0, 5, 10, 20, 60])
+        tags = ()
+        if rng.random() < 0.25:
+            tags = ("NH:i:2",)
+
+        mode = rng.choice(modes)
+        stranded = rng.choice(stranded_values)
+        nonunique = rng.choice(nonunique_values)
+        generated.append((
+            f"fuzz_{idx:04d}",
+            gtfs,
+            [sam("r1", pos=pos, cigar=cigar, flag=flag, mapq=mapq, tags=tags)],
+            opts(
+                mode=mode,
+                nonunique=nonunique,
+                stranded=stranded,
+                minaqual=10,
+            ),
+        ))
+    return generated
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--rust-bin", default="target/release/htseq_count_rust")
     ap.add_argument("--htseq-bin", default="htseq-count")
     ap.add_argument("--build", action="store_true")
     ap.add_argument("--case", action="append", default=[])
+    ap.add_argument("--fuzz", type=int, default=0,
+                    help="Add N deterministic randomized single-end parity cases.")
+    ap.add_argument("--fuzz-seed", type=int, default=1337)
     args = ap.parse_args()
 
     root = Path.cwd()
@@ -206,10 +262,12 @@ def main():
     print("Rust binary:", rust)
     print()
 
-    cases = CASES
+    cases = list(CASES)
+    if args.fuzz:
+        cases.extend(fuzz_cases(args.fuzz_seed, args.fuzz))
     if args.case:
         wanted = set(args.case)
-        cases = [case for case in CASES if case[0] in wanted]
+        cases = [case for case in cases if case[0] in wanted]
 
     different = 0
     known_differences = {"paired_end_same_gene"}
@@ -230,6 +288,14 @@ def main():
             if rr.returncode or hr.returncode:
                 different += 1
                 print(f"[DIFF] {name}: exit rust={rr.returncode}, htseq={hr.returncode}")
+                if name.startswith("fuzz_"):
+                    print("  opts:", " ".join(op))
+                    print("  GTF:")
+                    for line in gtfs:
+                        print("   ", line)
+                    print("  SAM:")
+                    for line in sams:
+                        print("   ", line)
                 if rr.stderr.strip():
                     print("  rust stderr:", rr.stderr.strip().replace("\n", " | "))
                 if hr.stderr.strip():
@@ -244,6 +310,14 @@ def main():
             elif d:
                 different += 1
                 print(f"[DIFF] {name}")
+                if name.startswith("fuzz_"):
+                    print("  opts:", " ".join(op))
+                    print("  GTF:")
+                    for line in gtfs:
+                        print("   ", line)
+                    print("  SAM:")
+                    for line in sams:
+                        print("   ", line)
                 for row in d:
                     print(" ", row)
             else:
