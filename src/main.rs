@@ -622,131 +622,598 @@ fn write_counts(counts: HashMap<String, f64>, args: Args, counter: i32) {
 }
 
 
-fn count_reads(reads_reader: &mut ReadsReader, counter: &mut i32, counts: &mut HashMap<String, f64>, args: &Args, gtf: Vec<Option<IntervalTree>>, sender: mpsc::Sender<FeatureType>) {
-    let processing_function = match args._m.as_str() {
+fn processing_function_for_mode(
+    mode: &str,
+) -> fn(&IntervalTree, i32, i32, bool, &mut Vec<Vec<Feature>>, &Args) {
+    match mode {
         "intersection-strict" => process_intersection_strict_read,
         "intersection-nonempty" => process_intersection_nonempty_read,
         "union" => process_union_read,
         _ => panic!("Invalid mode"),
-    };
-    
-    //let debug_read = "SRR5724993.27326844".to_string();
-    //let debug_read_bytes = debug_read.as_bytes();
+    }
+}
 
-    let ambiguity_function = match args._m.as_str() {
+fn ambiguity_function_for_mode(mode: &str) -> fn(&[Vec<Feature>]) -> Vec<String> {
+    match mode {
         "intersection-strict" => filter_ambiguity_intersection_strict,
         "intersection-nonempty" => filter_ambiguity_intersection_nonempty,
         "union" => filter_ambiguity_union,
         _ => panic!("Invalid mode"),
+    }
+}
+
+fn add_record_blocks(
+    record: &bam::Record,
+    invert_pair_strand: bool,
+    gtf: &[Option<IntervalTree>],
+    overlapping_features: &mut Vec<Vec<Feature>>,
+    args: &Args,
+) -> bool {
+    if !record.flag().is_mapped() || record.ref_id() < 0 {
+        return true;
+    }
+
+    let ref_id = record.ref_id() as usize;
+    let features = match gtf.get(ref_id).and_then(|tree| tree.as_ref()) {
+        Some(features) => features,
+        None => return false,
     };
 
-    let mut record = bam::Record::new();
-    let mut overlapping_features: Vec<Vec<Feature>> = Vec::with_capacity(3);
-    loop {
-        overlapping_features.clear();
-        match reads_reader.read_into(&mut record) {
-            Ok(true) => {},
-            Ok(false) => break,
-            Err(e) => panic!("{}", e),
+    let processing_function = processing_function_for_mode(args._m.as_str());
+    let mut reference_pos = record.start() + 1;
+    let record_reverse = record.flag().is_reverse_strand();
+    let effective_reverse = if invert_pair_strand {
+        !record_reverse
+    } else {
+        record_reverse
+    };
+
+    for cig in record.cigar().iter() {
+        let length = cig.0 as i32;
+        let operation = cig.1;
+
+        if operation.is_match() && length > 0 {
+            let block_end = reference_pos + length - 1;
+            processing_function(
+                features,
+                reference_pos,
+                block_end,
+                effective_reverse,
+                overlapping_features,
+                args,
+            );
         }
-    //for record in bam {
-        //eprintln!("{} records processed.", counter);
-        *counter += 1;
-        if *counter % 100000 == 0 {
-            //println!("{} records processed.", counter);
-            eprintln!("{} records processed.", counter);
-        }
-        if should_skip_record(&record, counts, args, &sender) {
-            continue;
-        }
-        
-        let ref_id = record.ref_id() as usize;
 
-        if gtf[ref_id].is_some() {
-            let mut reference_pos = record.start() + 1;
-            let features = &gtf[ref_id].as_ref().unwrap();
-            let cigar = record.cigar();
-
-            for cig in cigar.iter() {
-                let length = cig.0 as i32;
-                let operation = cig.1;
-
-                if operation.is_match() && length > 0 {
-                    let block_end = reference_pos + length - 1;
-                    processing_function(
-                        features,
-                        reference_pos,
-                        block_end,
-                        record.flag().is_reverse_strand(),
-                        &mut overlapping_features,
-                        args,
-                    );
-                }
-
-                if operation.consumes_ref() {
-                    reference_pos += length;
-                }
-            }
-
-            // get the unique feature_names from the overlapping features, also filter out the empty names
-            let mut unique_feature_names= ambiguity_function(&overlapping_features);
-            // if record.name() == debug_read_bytes{
-            //     eprintln!("unique_feature_names: {:?}", unique_feature_names);
-            // }
-            // match based on the amount of unique feature names
-            let feature_name_len = unique_feature_names.len();
-
-            match feature_name_len {
-                0 => {
-                    // if there are no unique feature names, we have no feature
-                    *counts.entry("__no_feature".to_string()).or_insert(0.0) += 1.0;
-                    _ = sender.send(FeatureType::NoFeature);
-                },
-                1 => {
-                    // if there is only one unique feature name, we have a non-ambiguous read
-                    let feature_name = unique_feature_names.first().unwrap();
-                    *counts.entry(feature_name.clone()).or_insert(0.0) += 1.0;
-                    _ = sender.send(FeatureType::Name(feature_name.clone()));
-                },
-                _ => {
-                    // if there are multiple unique feature names, we have an ambiguous read
-                    *counts.entry("__ambiguous".to_string()).or_insert(0.0) += 1.0;
-                    match args.nonunique.as_str() {
-                        "all" => {
-                        // we also increment each feature name by 1
-                            for feature_name in unique_feature_names.clone() {
-                                *counts.entry(feature_name.clone()).or_insert(0.0) += 1.0;
-                            }
-                        },
-                        "fraction" => {
-                            // we increment each feature name by 1 divided by the amount of unique feature names
-                            let fractional_count = 1.0 / feature_name_len as f64;
-                            for feature_name in unique_feature_names.clone() {
-                                *counts.entry(feature_name.clone()).or_insert(0.0) += fractional_count;
-                            }
-                        },
-                        "random" => {
-                            // we increment one of the feature names by 1
-                            let random_index = rand::random_range(0..feature_name_len);
-                            let feature_name = unique_feature_names[random_index].clone();
-                            *counts.entry(feature_name).or_insert(0.0) += 1.0;
-                        },
-                        _ => {// do nothing
-                        },
-                    }
-                    unique_feature_names.sort();
-                    _ = sender.send(FeatureType::Ambiguous(unique_feature_names.join("+")));
-                }
-            }
-        } else {
-            // No reference found for this read
-            // TODO: check if we should add this to __no_feature or we should throw an error
-            *counts.entry("__no_feature".to_string()).or_insert(0.0) += 1.0;
-            _ = sender.send(FeatureType::NoFeature);
+        if operation.consumes_ref() {
+            reference_pos += length;
         }
     }
 
-    eprintln!("{} records processed.", counter);
+    true
+}
+
+fn assign_overlaps(
+    overlapping_features: &[Vec<Feature>],
+    counts: &mut HashMap<String, f64>,
+    args: &Args,
+    sender: &mpsc::Sender<FeatureType>,
+) {
+    let ambiguity_function = ambiguity_function_for_mode(args._m.as_str());
+    let mut unique_feature_names = ambiguity_function(overlapping_features);
+    let feature_name_len = unique_feature_names.len();
+
+    match feature_name_len {
+        0 => {
+            *counts.entry("__no_feature".to_string()).or_insert(0.0) += 1.0;
+            _ = sender.send(FeatureType::NoFeature);
+        }
+        1 => {
+            let feature_name = unique_feature_names.first().unwrap();
+            *counts.entry(feature_name.clone()).or_insert(0.0) += 1.0;
+            _ = sender.send(FeatureType::Name(feature_name.clone()));
+        }
+        _ => {
+            *counts.entry("__ambiguous".to_string()).or_insert(0.0) += 1.0;
+            match args.nonunique.as_str() {
+                "all" => {
+                    for feature_name in &unique_feature_names {
+                        *counts.entry(feature_name.clone()).or_insert(0.0) += 1.0;
+                    }
+                }
+                "fraction" => {
+                    let fractional_count = 1.0 / feature_name_len as f64;
+                    for feature_name in &unique_feature_names {
+                        *counts.entry(feature_name.clone()).or_insert(0.0) += fractional_count;
+                    }
+                }
+                "random" => {
+                    let random_index = rand::random_range(0..feature_name_len);
+                    let feature_name = unique_feature_names[random_index].clone();
+                    *counts.entry(feature_name).or_insert(0.0) += 1.0;
+                }
+                _ => {}
+            }
+
+            unique_feature_names.sort();
+            _ = sender.send(FeatureType::Ambiguous(unique_feature_names.join("+")));
+        }
+    }
+}
+
+fn count_single_record(
+    record: &bam::Record,
+    counter: &mut i32,
+    counts: &mut HashMap<String, f64>,
+    args: &Args,
+    gtf: &[Option<IntervalTree>],
+    sender: &mpsc::Sender<FeatureType>,
+) {
+    *counter += 1;
+    if *counter % 100000 == 0 {
+        eprintln!("{} records processed.", counter);
+    }
+
+    if should_skip_record(record, counts, args, sender) {
+        return;
+    }
+
+    let mut overlapping_features = Vec::with_capacity(3);
+    if !add_record_blocks(record, false, gtf, &mut overlapping_features, args) {
+        *counts.entry("__no_feature".to_string()).or_insert(0.0) += 1.0;
+        _ = sender.send(FeatureType::NoFeature);
+        return;
+    }
+
+    assign_overlaps(&overlapping_features, counts, args, sender);
+}
+
+fn pair_side(record: &bam::Record) -> u8 {
+    match (record.flag().first_in_pair(), record.flag().last_in_pair()) {
+        (true, false) => 1,
+        (false, true) => 2,
+        _ => panic!(
+            "Paired-end alignment '{}' must have exactly one of the READ1/READ2 flags set",
+            String::from_utf8_lossy(record.name())
+        ),
+    }
+}
+
+fn primary_only_pairing(args: &Args) -> bool {
+    args.secondary_alignments == "ignore" && args.supplementary_alignments == "ignore"
+}
+
+fn should_pre_filter_pair_record(record: &bam::Record, args: &Args) -> bool {
+    primary_only_pairing(args)
+        && (record.flag().is_secondary() || record.flag().is_supplementary())
+}
+
+fn record_is_multimapped(record: &bam::Record) -> bool {
+    matches!(
+        record.tags().get(b"NH"),
+        Some(TagValue::Int(value, _)) if value > 1
+    )
+}
+
+fn should_skip_pair(
+    first: Option<&bam::Record>,
+    second: Option<&bam::Record>,
+    counts: &mut HashMap<String, f64>,
+    args: &Args,
+    sender: &mpsc::Sender<FeatureType>,
+) -> bool {
+    let first_mapped = first.map(|r| r.flag().is_mapped()).unwrap_or(false);
+    let second_mapped = second.map(|r| r.flag().is_mapped()).unwrap_or(false);
+
+    if !first_mapped && !second_mapped {
+        *counts.entry("__not_aligned".to_string()).or_insert(0.0) += 1.0;
+        _ = sender.send(FeatureType::NotAligned);
+        return true;
+    }
+
+    if args.secondary_alignments == "ignore"
+        && (first.map(|r| r.flag().is_secondary()).unwrap_or(false)
+            || second.map(|r| r.flag().is_secondary()).unwrap_or(false))
+    {
+        _ = sender.send(FeatureType::None);
+        return true;
+    }
+
+    if args.supplementary_alignments == "ignore"
+        && (first.map(|r| r.flag().is_supplementary()).unwrap_or(false)
+            || second.map(|r| r.flag().is_supplementary()).unwrap_or(false))
+    {
+        _ = sender.send(FeatureType::None);
+        return true;
+    }
+
+    let multimapped = first.map(record_is_multimapped).unwrap_or(false)
+        || second.map(record_is_multimapped).unwrap_or(false);
+    if multimapped {
+        *counts
+            .entry("__alignment_not_unique".to_string())
+            .or_insert(0.0) += 1.0;
+        if args.nonunique == "none" {
+            _ = sender.send(FeatureType::AlignmentNotUnique);
+            return true;
+        }
+    }
+
+    let low_quality = first.map(|r| r.mapq() < args.a).unwrap_or(false)
+        || second.map(|r| r.mapq() < args.a).unwrap_or(false);
+    if low_quality {
+        *counts.entry("__too_low_aQual".to_string()).or_insert(0.0) += 1.0;
+        _ = sender.send(FeatureType::TooLowaQual);
+        return true;
+    }
+
+    false
+}
+
+fn count_pair(
+    first: Option<&bam::Record>,
+    second: Option<&bam::Record>,
+    counter: &mut i32,
+    counts: &mut HashMap<String, f64>,
+    args: &Args,
+    gtf: &[Option<IntervalTree>],
+    sender: &mpsc::Sender<FeatureType>,
+) {
+    *counter += 1;
+    if *counter % 100000 == 0 {
+        eprintln!("{} read pairs processed.", counter);
+    }
+
+    if should_skip_pair(first, second, counts, args, sender) {
+        return;
+    }
+
+    let mut overlapping_features = Vec::with_capacity(6);
+    let mut all_chromosomes_known = true;
+
+    if let Some(record) = first {
+        all_chromosomes_known &= add_record_blocks(
+            record,
+            false,
+            gtf,
+            &mut overlapping_features,
+            args,
+        );
+    }
+    if let Some(record) = second {
+        // HTSeq inverts mate 2 before applying strandedness. With
+        // --stranded reverse the later strand comparison inverts it back.
+        all_chromosomes_known &= add_record_blocks(
+            record,
+            true,
+            gtf,
+            &mut overlapping_features,
+            args,
+        );
+    }
+
+    if !all_chromosomes_known {
+        *counts.entry("__no_feature".to_string()).or_insert(0.0) += 1.0;
+        _ = sender.send(FeatureType::NoFeature);
+        return;
+    }
+
+    assign_overlaps(&overlapping_features, counts, args, sender);
+}
+
+fn records_are_mates_name_sorted(first: &bam::Record, second: &bam::Record) -> bool {
+    if pair_side(first) == pair_side(second) {
+        return false;
+    }
+
+    let first_aligned = first.flag().is_mapped();
+    let second_aligned = second.flag().is_mapped();
+    let first_mate_aligned = first.flag().mate_is_mapped();
+    let second_mate_aligned = second.flag().mate_is_mapped();
+
+    if first_aligned != second_mate_aligned || first_mate_aligned != second_aligned {
+        return false;
+    }
+
+    if !(first_aligned && second_aligned) {
+        return true;
+    }
+
+    first.ref_id() == second.mate_ref_id()
+        && first.start() == second.mate_start()
+        && second.ref_id() == first.mate_ref_id()
+        && second.start() == first.mate_start()
+}
+
+fn process_name_group(
+    mut group: VecDeque<bam::Record>,
+    counter: &mut i32,
+    counts: &mut HashMap<String, f64>,
+    args: &Args,
+    gtf: &[Option<IntervalTree>],
+    sender: &mpsc::Sender<FeatureType>,
+) {
+    while let Some(record) = group.pop_front() {
+        let mate_index = group
+            .iter()
+            .position(|candidate| records_are_mates_name_sorted(&record, candidate));
+        let mate = mate_index.and_then(|index| group.remove(index));
+
+        if pair_side(&record) == 1 {
+            count_pair(
+                Some(&record),
+                mate.as_ref(),
+                counter,
+                counts,
+                args,
+                gtf,
+                sender,
+            );
+        } else {
+            count_pair(
+                mate.as_ref(),
+                Some(&record),
+                counter,
+                counts,
+                args,
+                gtf,
+                sender,
+            );
+        }
+    }
+}
+
+fn count_paired_name_sorted(
+    reads_reader: &mut ReadsReader,
+    first_record: bam::Record,
+    counter: &mut i32,
+    counts: &mut HashMap<String, f64>,
+    args: &Args,
+    gtf: &[Option<IntervalTree>],
+    sender: &mpsc::Sender<FeatureType>,
+) {
+    let mut current_name: Option<Vec<u8>> = None;
+    let mut group = VecDeque::new();
+
+    let records = std::iter::once(Ok(first_record)).chain(reads_reader.by_ref());
+    for result in records {
+        let record = result.unwrap_or_else(|e| panic!("{}", e));
+        if !record.flag().is_paired() {
+            panic!("Mixed single-end and paired-end records are not supported");
+        }
+        pair_side(&record);
+
+        if should_pre_filter_pair_record(&record, args) {
+            continue;
+        }
+
+        let name = record.name().to_vec();
+        match &current_name {
+            Some(current) if *current != name => {
+                process_name_group(group, counter, counts, args, gtf, sender);
+                group = VecDeque::new();
+                current_name = Some(name.clone());
+            }
+            None => current_name = Some(name.clone()),
+            _ => {}
+        }
+        group.push_back(record);
+    }
+
+    if !group.is_empty() {
+        process_name_group(group, counter, counts, args, gtf, sender);
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+struct MateKey {
+    name: Vec<u8>,
+    which: u8,
+    ref_id: Option<i32>,
+    start: Option<i32>,
+    mate_ref_id: Option<i32>,
+    mate_start: Option<i32>,
+    template_len: Option<i32>,
+}
+
+fn record_pair_key(record: &bam::Record) -> MateKey {
+    let aligned = record.flag().is_mapped();
+    let mate_aligned = record.flag().mate_is_mapped();
+    MateKey {
+        name: record.name().to_vec(),
+        which: pair_side(record),
+        ref_id: aligned.then_some(record.ref_id()),
+        start: aligned.then_some(record.start()),
+        mate_ref_id: mate_aligned.then_some(record.mate_ref_id()),
+        mate_start: mate_aligned.then_some(record.mate_start()),
+        template_len: (aligned && mate_aligned).then_some(record.template_len()),
+    }
+}
+
+fn expected_mate_key(record: &bam::Record) -> MateKey {
+    let aligned = record.flag().is_mapped();
+    let mate_aligned = record.flag().mate_is_mapped();
+    MateKey {
+        name: record.name().to_vec(),
+        which: if pair_side(record) == 1 { 2 } else { 1 },
+        ref_id: mate_aligned.then_some(record.mate_ref_id()),
+        start: mate_aligned.then_some(record.mate_start()),
+        mate_ref_id: aligned.then_some(record.ref_id()),
+        mate_start: aligned.then_some(record.start()),
+        template_len: (aligned && mate_aligned).then_some(-record.template_len()),
+    }
+}
+
+fn count_paired_position_sorted(
+    reads_reader: &mut ReadsReader,
+    first_record: bam::Record,
+    counter: &mut i32,
+    counts: &mut HashMap<String, f64>,
+    args: &Args,
+    gtf: &[Option<IntervalTree>],
+    sender: &mpsc::Sender<FeatureType>,
+) {
+    let mut buffer: HashMap<MateKey, VecDeque<bam::Record>> = HashMap::new();
+
+    let records = std::iter::once(Ok(first_record)).chain(reads_reader.by_ref());
+    for result in records {
+        let record = result.unwrap_or_else(|e| panic!("{}", e));
+        if !record.flag().is_paired() {
+            panic!("Mixed single-end and paired-end records are not supported");
+        }
+        let side = pair_side(&record);
+
+        if should_pre_filter_pair_record(&record, args) {
+            continue;
+        }
+
+        let mate_key = expected_mate_key(&record);
+        let mate = if let Some(queue) = buffer.get_mut(&mate_key) {
+            let mate = queue.pop_front();
+            if queue.is_empty() {
+                buffer.remove(&mate_key);
+            }
+            mate
+        } else {
+            None
+        };
+
+        if let Some(mate) = mate {
+            if side == 1 {
+                count_pair(
+                    Some(&record),
+                    Some(&mate),
+                    counter,
+                    counts,
+                    args,
+                    gtf,
+                    sender,
+                );
+            } else {
+                count_pair(
+                    Some(&mate),
+                    Some(&record),
+                    counter,
+                    counts,
+                    args,
+                    gtf,
+                    sender,
+                );
+            }
+        } else {
+            buffer
+                .entry(record_pair_key(&record))
+                .or_default()
+                .push_back(record);
+            if buffer.len() > args.max_buffer_size {
+                panic!(
+                    "Maximum paired-end alignment buffer size exceeded ({} mate keys). \
+                     Check that --order pos matches the input, or increase --max-reads-in-buffer.",
+                    args.max_buffer_size
+                );
+            }
+        }
+    }
+
+    for (_, mut queue) in buffer {
+        while let Some(record) = queue.pop_front() {
+            if pair_side(&record) == 1 {
+                count_pair(
+                    Some(&record),
+                    None,
+                    counter,
+                    counts,
+                    args,
+                    gtf,
+                    sender,
+                );
+            } else {
+                count_pair(
+                    None,
+                    Some(&record),
+                    counter,
+                    counts,
+                    args,
+                    gtf,
+                    sender,
+                );
+            }
+        }
+    }
+}
+
+fn count_reads(
+    reads_reader: &mut ReadsReader,
+    counter: &mut i32,
+    counts: &mut HashMap<String, f64>,
+    args: &Args,
+    gtf: Vec<Option<IntervalTree>>,
+    sender: mpsc::Sender<FeatureType>,
+) {
+    let first_record = match reads_reader.next() {
+        Some(Ok(record)) => record,
+        Some(Err(e)) => panic!("{}", e),
+        None => {
+            eprintln!("0 records processed.");
+            return;
+        }
+    };
+
+    if first_record.flag().is_paired() {
+        if args.output_sam.is_some() {
+            panic!(
+                "--samout is not yet supported for paired-end input. \
+                 Counting is supported; SAM annotation needs an order-aware writer."
+            );
+        }
+
+        match args.order.as_str() {
+            "name" => count_paired_name_sorted(
+                reads_reader,
+                first_record,
+                counter,
+                counts,
+                args,
+                &gtf,
+                &sender,
+            ),
+            "pos" => count_paired_position_sorted(
+                reads_reader,
+                first_record,
+                counter,
+                counts,
+                args,
+                &gtf,
+                &sender,
+            ),
+            _ => unreachable!(),
+        }
+        eprintln!("{} read pairs processed.", counter);
+    } else {
+        count_single_record(
+            &first_record,
+            counter,
+            counts,
+            args,
+            &gtf,
+            &sender,
+        );
+
+        for result in reads_reader.by_ref() {
+            let record = result.unwrap_or_else(|e| panic!("{}", e));
+            if record.flag().is_paired() {
+                panic!("Mixed single-end and paired-end records are not supported");
+            }
+            count_single_record(
+                &record,
+                counter,
+                counts,
+                args,
+                &gtf,
+                &sender,
+            );
+        }
+        eprintln!("{} records processed.", counter);
+    }
 }
 
 fn process_union_read(features: &IntervalTree, start_pos: i32, end_pos: i32, strand: bool, overlapping_features: &mut Vec<Vec<Feature>>, args: &Args) {
