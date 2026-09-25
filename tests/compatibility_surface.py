@@ -224,6 +224,32 @@ def test_tabular(repo, rust, htseq, root, gtf, sam1, sam2):
     compare_tabular("auto format", rr.stdout, hr.stdout, 1)
     print("[ OK ] auto format")
 
+    rust_append = root / "rust_append.tsv"
+    ht_append = root / "ht_append.tsv"
+    rust_append.write_text("PREEXISTING\n")
+    ht_append.write_text("PREEXISTING\n")
+    rr = run([
+        rust, "-s", "no", "--append-output",
+        "-c", rust_append, sam1, gtf
+    ], repo)
+    hr = run([
+        htseq, "-s", "no", "--append-output",
+        "-c", ht_append, sam1, gtf
+    ], repo)
+    require_ok("Rust append output", rr)
+    require_ok("HTSeq append output", hr)
+    if not rust_append.read_text().startswith("PREEXISTING\n"):
+        raise AssertionError("Rust --append-output truncated existing content")
+    if not ht_append.read_text().startswith("PREEXISTING\n"):
+        raise AssertionError("HTSeq --append-output test fixture failed")
+    compare_tabular(
+        "append output",
+        "\n".join(rust_append.read_text().splitlines()[1:]),
+        "\n".join(ht_append.read_text().splitlines()[1:]),
+        1,
+    )
+    print("[ OK ] append output")
+
 
 def xf_rows(path, mode="r"):
     rows = []
