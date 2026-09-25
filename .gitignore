@@ -13,3 +13,5 @@ perf*
 *.bai
 *.txt
 *.svg
+benchmarks/data/
+benchmarks/results/
