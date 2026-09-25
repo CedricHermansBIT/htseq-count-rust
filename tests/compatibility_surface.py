@@ -120,6 +120,31 @@ def write_fixture(root: Path):
     return gtf, sam1, sam2, paired
 
 
+def test_cli_compat(repo, rust, htseq, gtf, sam1):
+    version = run([rust, "--version"], repo)
+    require_ok("Rust --version", version)
+    if not version.stdout.strip():
+        raise AssertionError("--version produced no output")
+    print("[ OK ] version")
+
+    # HTSeq accepts -f for old scripts but ignores it in modern releases.
+    # Deliberately lie about the format and ensure auto-detection still wins.
+    rr = run([rust, "-f", "bam", "-s", "no", sam1, gtf], repo)
+    hr = run([htseq, "-f", "bam", "-s", "no", sam1, gtf], repo)
+    # HTSeq itself ignores -f and therefore succeeds on the SAM input.
+    require_ok("Rust deprecated -f", rr)
+    require_ok("HTSeq deprecated -f", hr)
+    compare_tabular("deprecated -f", rr.stdout, hr.stdout, 1)
+    print("[ OK ] deprecated format flag")
+
+    quiet = run([rust, "-q", "-s", "no", sam1, gtf], repo)
+    require_ok("Rust quiet", quiet)
+    noisy_fragments = ("GFF lines processed", "records processed", "Creating IntervalTree")
+    if any(fragment in quiet.stderr for fragment in noisy_fragments):
+        raise AssertionError(f"--quiet still emitted progress:\n{quiet.stderr}")
+    print("[ OK ] quiet")
+
+
 def test_tabular(repo, rust, htseq, root, gtf, sam1, sam2):
     cases = [
         (
@@ -377,6 +402,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="htseq-rust-compat-") as td:
         root = Path(td)
         gtf, sam1, sam2, paired = write_fixture(root)
+        test_cli_compat(repo, rust, htseq, gtf, sam1)
         test_tabular(repo, rust, htseq, root, gtf, sam1, sam2)
         test_cram(repo, rust, htseq, root, gtf, sam1)
         test_samout(repo, rust, htseq, root, gtf, sam1, sam2, paired)
