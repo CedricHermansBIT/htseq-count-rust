@@ -1005,16 +1005,19 @@ fn count_paired_name_sorted(
             continue;
         }
 
-        let name = record.name().to_vec();
-        match &current_name {
-            Some(current) if *current != name => {
-                process_name_group(group, counter, counts, args, gtf, sender);
-                group = VecDeque::new();
-                current_name = Some(name.clone());
-            }
-            None => current_name = Some(name.clone()),
-            _ => {}
+        let name_changed = current_name
+            .as_ref()
+            .map(|current| current.as_slice() != record.name())
+            .unwrap_or(false);
+
+        if name_changed {
+            process_name_group(group, counter, counts, args, gtf, sender);
+            group = VecDeque::new();
+            current_name = Some(record.name().to_vec());
+        } else if current_name.is_none() {
+            current_name = Some(record.name().to_vec());
         }
+
         group.push_back(record);
     }
 
@@ -1034,18 +1037,12 @@ struct MateKey {
     template_len: Option<i32>,
 }
 
-fn record_pair_key(record: &bam::Record) -> MateKey {
-    let aligned = record.flag().is_mapped();
-    let mate_aligned = record.flag().mate_is_mapped();
-    MateKey {
-        name: record.name().to_vec(),
-        which: pair_side(record),
-        ref_id: aligned.then_some(record.ref_id()),
-        start: aligned.then_some(record.start()),
-        mate_ref_id: mate_aligned.then_some(record.mate_ref_id()),
-        mate_start: mate_aligned.then_some(record.mate_start()),
-        template_len: (aligned && mate_aligned).then_some(record.template_len()),
-    }
+fn own_key_from_expected_mate_key(mut key: MateKey) -> MateKey {
+    key.which = if key.which == 1 { 2 } else { 1 };
+    std::mem::swap(&mut key.ref_id, &mut key.mate_ref_id);
+    std::mem::swap(&mut key.start, &mut key.mate_start);
+    key.template_len = key.template_len.map(|value| -value);
+    key
 }
 
 fn expected_mate_key(record: &bam::Record) -> MateKey {
@@ -1119,8 +1116,11 @@ fn count_paired_position_sorted(
                 );
             }
         } else {
+            // Reuse the QNAME allocation from the failed mate lookup instead of
+            // allocating it a second time for the record's own buffer key.
+            let record_key = own_key_from_expected_mate_key(mate_key);
             buffer
-                .entry(record_pair_key(&record))
+                .entry(record_key)
                 .or_default()
                 .push_back(record);
             if buffer.len() > args.max_buffer_size {
