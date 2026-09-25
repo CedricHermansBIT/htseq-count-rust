@@ -1419,7 +1419,18 @@ fn count_single_record(
     }
 
     if let Some(assignment) = should_skip_record(record, counts, args) {
-        store_record_assignment(assignments, record, assignment);
+        if matches!(assignment, FeatureType::TooLowaQual)
+            && args.nonunique != "none"
+            && nh_multimap_status(record).unwrap_or(false)
+        {
+            store_record_assignments(
+                assignments,
+                record,
+                vec![FeatureType::AlignmentNotUnique, assignment],
+            );
+        } else {
+            store_record_assignment(assignments, record, assignment);
+        }
         return;
     }
 
@@ -1556,7 +1567,19 @@ fn count_pair(
     }
 
     if let Some(assignment) = should_skip_pair(first, second, counts, args) {
-        store_pair_assignment(assignments, first, second, assignment);
+        if matches!(assignment, FeatureType::TooLowaQual)
+            && args.nonunique != "none"
+            && pair_is_multimapped_htseq_compatible(first, second)
+        {
+            store_pair_assignments(
+                assignments,
+                first,
+                second,
+                vec![FeatureType::AlignmentNotUnique, assignment],
+            );
+        } else {
+            store_pair_assignment(assignments, first, second, assignment);
+        }
         return;
     }
 
