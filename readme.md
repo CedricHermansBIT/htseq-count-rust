@@ -2,7 +2,7 @@
 
 TallySeq is a fast Rust implementation of `htseq-count` semantics, designed as a practical drop-in counting replacement while retaining HTSeq-compatible results and file formats.
 
-The `diagnostics` branch is tested against HTSeq 2.1.2 and supports the main `htseq-count` command-line surface, including multiple input files, single-end and paired-end data, SAM/BAM/CRAM, stdin, compressed annotations, metadata columns, matrix output formats and annotated SAM/BAM output.
+The `diagnostics` branch is tested against HTSeq 2.1.2 and supports the main `htseq-count` command-line surface, including multiple input files, single-end and paired-end data, SAM/BAM, stdin, compressed annotations, metadata columns, matrix output formats and annotated SAM/BAM output. CRAM input is supported on Linux and macOS.
 
 ## Installation
 
@@ -72,12 +72,14 @@ A Rust-specific `--threads` option controls BAM/CRAM decoding threads per input 
 
 ### Input compatibility
 
-Normal local SAM and BAM files use the fast pure-Rust reader directly. HTSlib is used as a compatibility bridge when needed for:
+Normal local SAM and BAM files use the fast pure-Rust reader directly. On Linux and macOS, HTSlib is used as a compatibility bridge when needed for:
 
 - CRAM
 - stdin
 - alignment files without a recognized extension
 - format autodetection outside the direct SAM/BAM path
+
+The Windows build keeps the dependency stack fully native and uses the pure-Rust SAM/BAM reader for files, stdin and format sniffing. CRAM input is not currently available in the Windows package.
 
 GTF/GFF annotations may be plain text or gzip-compressed (`.gz` / `.gzip`). The annotation parser accepts the common GTF/GFF2 and GFF3 attribute separators and handles quoted semicolons correctly.
 
@@ -145,7 +147,7 @@ One unusual behavior is deliberately retained for HTSeq 2.1.2 parity: if paired 
 
 `Cargo.lock` is committed and CI builds with `cargo build --release --locked`. Release packaging is validated natively on Linux x86_64/ARM64, macOS x86_64/ARM64, and Windows x86_64.
 
-The implementation uses the lightweight pure-Rust `bam` crate on the normal SAM/BAM hot path. HTSlib is included for CRAM/stdin/autodetection compatibility, and `rust-hdf5` is used for native H5AD/Loom output.
+The implementation uses the lightweight pure-Rust `bam` crate on the normal SAM/BAM hot path. On Unix platforms, HTSlib is included for CRAM and compatibility conversion; the Windows package omits HTSlib so it can build natively. `rust-hdf5` is used for native H5AD/Loom output.
 
 ### Optional feature-tree export
 
