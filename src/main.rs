@@ -9,6 +9,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 use std::sync::mpsc;
 use std::thread;
+use std::time::Instant;
 use clap::Parser;
 
 mod feature;
@@ -69,8 +70,15 @@ fn main() {
     };
     // bam fields: https://docs.rs/bam/0.3.0/bam/record/struct.Record.html
 
-    // Read the gtf file
+    // Read and index the annotation.
+    let annotation_started = Instant::now();
     let gtf = read_gtf(&args.gtf, &args.t, &ref_names_to_id, &args);
+    if std::env::var_os("HTSEQ_COUNT_RUST_TIMINGS").is_some() {
+        eprintln!(
+            "__timing_annotation_total_seconds\t{:.6}",
+            annotation_started.elapsed().as_secs_f64()
+        );
+    }
 
     // let read= 21940455;
     // eprintln!("Searching for reads overlapping position {}-{}...", read, read+25);
@@ -98,6 +106,7 @@ fn main() {
     //let mut read_to_feature: Vec<FeatureType> = Vec::new();
     let mut counter = 0;
 
+    let counting_started = Instant::now();
     count_reads(
         &mut reads_reader,
         &mut counter,
@@ -106,6 +115,12 @@ fn main() {
         gtf,
         assignment_sender.as_ref(),
     );
+    if std::env::var_os("HTSEQ_COUNT_RUST_TIMINGS").is_some() {
+        eprintln!(
+            "__timing_counting_seconds\t{:.6}",
+            counting_started.elapsed().as_secs_f64()
+        );
+    }
 
     // Closing the sender lets the SAM writer terminate its receive loop.
     drop(assignment_sender);
@@ -438,6 +453,8 @@ fn parse_feature_id(raw: &str, id_attributes: &[String], line_number: usize) -> 
 }
 
 fn read_gtf(file_path: &str, feature_type_filter: &[String], ref_names_to_id: &HashMap<String, i32>, args: &Args) -> Vec<Option<IntervalTree>> {
+    let profile_timings = std::env::var_os("HTSEQ_COUNT_RUST_TIMINGS").is_some();
+    let parse_started = Instant::now();
     let mut map: HashMap<i32, Vec<Interval>> = HashMap::new();
     let file = File::open(file_path).expect("Could not open this file");
     let mut reader = BufReader::new(file);
@@ -531,7 +548,15 @@ fn read_gtf(file_path: &str, feature_type_filter: &[String], ref_names_to_id: &H
     }
 
     eprintln!("{} GFF lines processed.", counter);
+    if profile_timings {
+        eprintln!(
+            "__timing_gtf_parse_seconds\t{:.6}",
+            parse_started.elapsed().as_secs_f64()
+        );
+    }
+
     eprint!("Creating IntervalTree for each chromosome...");
+    let index_started = Instant::now();
 
     let mut result: Vec<Option<IntervalTree>> = Vec::with_capacity(chromosome_ids.len());
     for _ in 0..chromosome_ids.len() {
@@ -542,6 +567,12 @@ fn read_gtf(file_path: &str, feature_type_filter: &[String], ref_names_to_id: &H
         result[chr as usize] = Some(IntervalTree::new(Some(intervals)));
     }
     eprintln!("done.");
+    if profile_timings {
+        eprintln!(
+            "__timing_index_build_seconds\t{:.6}",
+            index_started.elapsed().as_secs_f64()
+        );
+    }
     result
 }
 
