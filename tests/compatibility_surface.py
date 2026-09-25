@@ -483,6 +483,7 @@ def test_formats(repo, rust, htseq, root, gtf, sam1, sam2):
     import scipy.sparse
     import anndata
     import loompy
+    import pandas as pd
 
     # MTX sparse, direct comparison against HTSeq.
     rust_mtx = root / "rust.mtx"
@@ -542,9 +543,11 @@ def test_formats(repo, rust, htseq, root, gtf, sam1, sam2):
         for idx in hmeta.var_names:
             rv = rmeta.var.loc[idx, column]
             hv = hmeta.var.loc[idx, column]
-            if bool(np.asarray([np.isnan(rv) if isinstance(rv, float) else False])[0]) != bool(np.asarray([np.isnan(hv) if isinstance(hv, float) else False])[0]):
+            r_missing = bool(pd.isna(rv))
+            h_missing = bool(pd.isna(hv))
+            if r_missing != h_missing:
                 raise AssertionError(f"H5AD metadata missingness differs for {idx}/{column}: {rv!r} vs {hv!r}")
-            if not (isinstance(hv, float) and np.isnan(hv)) and str(rv) != str(hv):
+            if not h_missing and str(rv) != str(hv):
                 raise AssertionError(f"H5AD metadata differs for {idx}/{column}: {rv!r} vs {hv!r}")
     print("[ OK ] H5AD metadata")
 
@@ -584,7 +587,15 @@ def test_formats(repo, rust, htseq, root, gtf, sam1, sam2):
             if set(rds.ra.keys()) != set(hds.ra.keys()):
                 raise AssertionError(f"Loom row attribute keys differ: {set(rds.ra.keys())} != {set(hds.ra.keys())}")
             for key in hds.ra.keys():
-                if not np.array_equal(np.asarray(rds.ra[key]), np.asarray(hds.ra[key]), equal_nan=True):
+                rv = np.asarray(rds.ra[key])
+                hv = np.asarray(hds.ra[key])
+                if rv.shape != hv.shape:
+                    raise AssertionError(f"Loom row attribute {key} shape differs")
+                if rv.dtype.kind in "fc" or hv.dtype.kind in "fc":
+                    equal = np.array_equal(rv, hv, equal_nan=True)
+                else:
+                    equal = np.array_equal(rv, hv)
+                if not equal:
                     raise AssertionError(f"Loom row attribute {key} differs")
         print("[ OK ] Loom metadata")
     else:
