@@ -33,7 +33,7 @@ jobs:
       - name: Benchmark paired union smoke case
         run: |
           python benchmarks/benchmark_real_data.py \
-            --rust-bin target/release/htseq_count_rust \
+            --rust-bin target/release/tallyseq \
             --scenario paired_union_no \
             --repeats 3
 
