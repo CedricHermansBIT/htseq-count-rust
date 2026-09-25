@@ -378,6 +378,65 @@ def fuzz_cases(seed, count):
         ))
     return generated
 
+def paired_fuzz_cases(seed, count):
+    rng = random.Random(seed)
+    generated = []
+    modes = ["union", "intersection-strict", "intersection-nonempty"]
+    stranded_values = ["no", "yes", "reverse"]
+    nonunique_values = ["none", "all", "fraction"]
+
+    for idx in range(count):
+        gtfs = []
+        for gi in range(rng.randint(1, 4)):
+            gene = f"gene{gi}"
+            strand = rng.choice(["+", "-"])
+            for _ in range(rng.randint(1, 3)):
+                start = rng.randint(80, 330)
+                length = rng.randint(3, 35)
+                gtfs.append(exon(start, start + length - 1, gene, strand=strand))
+
+        order = rng.choice(["name", "pos"])
+        records = []
+        for pi in range(rng.randint(1, 4)):
+            name = f"pair{pi}"
+            pos1 = rng.randint(90, 210)
+            pos2 = rng.randint(max(pos1 + 20, 150), 350)
+            cigar1 = random_cigar(rng)
+            cigar2 = random_cigar(rng)
+            mapq1 = rng.choice([5, 10, 20, 60])
+            mapq2 = rng.choice([5, 10, 20, 60])
+            tags1 = ("NH:i:2",) if rng.random() < 0.15 else ()
+            tags2 = ("NH:i:2",) if rng.random() < 0.15 else ()
+            tlen = pos2 - pos1 + 10
+            records.extend([
+                paired_sam(
+                    name, 99, pos1, pos2, cigar=cigar1, mapq=mapq1,
+                    tags=tags1, tlen=tlen,
+                ),
+                paired_sam(
+                    name, 147, pos2, pos1, cigar=cigar2, mapq=mapq2,
+                    tags=tags2, tlen=-tlen,
+                ),
+            ])
+
+        if order == "pos":
+            records.sort(key=lambda line: int(line.split("\t")[3]))
+
+        generated.append((
+            f"paired_fuzz_{idx:04d}_{order}",
+            gtfs,
+            records,
+            opts(
+                mode=rng.choice(modes),
+                nonunique=rng.choice(nonunique_values),
+                stranded=rng.choice(stranded_values),
+                minaqual=10,
+                order=order,
+            ),
+        ))
+
+    return generated
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--rust-bin", default="target/release/htseq_count_rust")
@@ -387,6 +446,9 @@ def main():
     ap.add_argument("--fuzz", type=int, default=0,
                     help="Add N deterministic randomized single-end parity cases.")
     ap.add_argument("--fuzz-seed", type=int, default=1337)
+    ap.add_argument("--paired-fuzz", type=int, default=0,
+                    help="Add N deterministic randomized paired-end parity cases.")
+    ap.add_argument("--paired-fuzz-seed", type=int, default=7331)
     args = ap.parse_args()
 
     root = Path.cwd()
@@ -404,6 +466,8 @@ def main():
     cases = list(CASES)
     if args.fuzz:
         cases.extend(fuzz_cases(args.fuzz_seed, args.fuzz))
+    if args.paired_fuzz:
+        cases.extend(paired_fuzz_cases(args.paired_fuzz_seed, args.paired_fuzz))
     if args.case:
         wanted = set(args.case)
         cases = [case for case in cases if case[0] in wanted]
@@ -426,7 +490,7 @@ def main():
             if rr.returncode or hr.returncode:
                 different += 1
                 print(f"[DIFF] {name}: exit rust={rr.returncode}, htseq={hr.returncode}")
-                if name.startswith("fuzz_"):
+                if name.startswith(("fuzz_", "paired_fuzz_")):
                     print("  opts:", " ".join(op))
                     print("  GTF:")
                     for line in gtfs:
@@ -444,7 +508,7 @@ def main():
             if d:
                 different += 1
                 print(f"[DIFF] {name}")
-                if name.startswith("fuzz_"):
+                if name.startswith(("fuzz_", "paired_fuzz_")):
                     print("  opts:", " ".join(op))
                     print("  GTF:")
                     for line in gtfs:
