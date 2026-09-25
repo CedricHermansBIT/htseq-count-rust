@@ -1,0 +1,26 @@
+name: Regenerate Cargo lockfile
+
+on:
+  push:
+    branches:
+      - diagnostics
+    paths:
+      - "Cargo.toml"
+      - ".github/workflows/regenerate-lockfile.yml"
+  workflow_dispatch:
+
+jobs:
+  lockfile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Regenerate lockfile
+        run: cargo generate-lockfile
+
+      - name: Upload Cargo.lock
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-lock
+          path: Cargo.lock
+          if-no-files-found: error
