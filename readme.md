@@ -89,6 +89,32 @@ The direct dependencies are kept at their current stable releases:
 
 `Cargo.lock` is committed and CI builds with `--locked`.
 
+## Real-data benchmark
+
+A reproducible benchmark is available in `benchmarks/benchmark_real_data.py`. It downloads real paired-end Pasilla RNA-seq chromosome 4 BAM files and the matching Drosophila BDGP5.78 GTF from Zenodo record 61771, verifies the published MD5 checksums, then benchmarks this implementation against HTSeq with identical counting options.
+
+The benchmark treats count parity as a hard requirement. Feature IDs, special rows and numeric counts must be exactly equal. No tolerance is used. If even one count differs, the benchmark stops and reports the first differences instead of producing a successful performance report.
+
+Run locally with:
+
+```bash
+python -m pip install HTSeq
+python benchmarks/benchmark_real_data.py --build --repeats 3
+```
+
+To benchmark both included real BAMs:
+
+```bash
+python benchmarks/benchmark_real_data.py --build \\
+  --dataset GSM461177 \\
+  --dataset GSM461178 \\
+  --repeats 3
+```
+
+Downloads are cached under `benchmarks/data`. Results are written as JSON and Markdown under `benchmarks/results`, including wall time, peak resident memory and the exact-parity result for every measured repeat. The script alternates which tool runs first between repeats to reduce systematic page-cache bias.
+
+There is also a manual GitHub Actions workflow named `Real-data benchmark`, so the same benchmark can be launched from the Actions tab without preparing the dataset locally.
+
 ## Performance
 
 An older benchmark used SRR5724993 aligned to GRCh38 with a GTF containing 1,065,949 genes and 58,663,336 alignment records:
