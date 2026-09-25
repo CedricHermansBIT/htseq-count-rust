@@ -531,10 +531,19 @@ fn write_annotated_samout(
             .get_mut(&record_identity(&record))
             .and_then(VecDeque::pop_front)
             .unwrap_or_else(|| vec![FeatureType::None]);
+
+        // HTSeq writes the record at each assignment/statistics event. This is
+        // observable for retained NH multimappers: one output record is written
+        // with XF=__alignment_not_unique, then the same record is written again
+        // after the final feature/no-feature assignment, with the XF tags
+        // accumulated on that second copy.
         for assignment in record_assignments {
+            if matches!(assignment, FeatureType::None) {
+                continue;
+            }
             record.tags_mut().push_string(b"XF", &assignment.as_bytes());
+            writer.write(&record).unwrap();
         }
-        writer.write(&record).unwrap();
     }
     writer.finish().expect("Could not finish annotated alignment output");
 }
