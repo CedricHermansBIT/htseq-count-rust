@@ -36,7 +36,7 @@ jobs:
         run: cargo build --release
 
       - name: Run parity diagnostics
-        run: python tests/parity_against_htseq.py --rust-bin target/release/htseq_count_rust --fuzz 150
+        run: python tests/parity_against_htseq.py --rust-bin target/release/htseq_count_rust --fuzz 150 --paired-fuzz 100
 
       - name: Check out HTSeq reference fixtures
         uses: actions/checkout@v4
