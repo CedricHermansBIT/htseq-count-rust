@@ -787,11 +787,31 @@ fn should_pre_filter_pair_record(record: &bam::Record, args: &Args) -> bool {
         && (record.flag().is_secondary() || record.flag().is_supplementary())
 }
 
-fn record_is_multimapped(record: &bam::Record) -> bool {
-    matches!(
-        record.tags().get(b"NH"),
-        Some(TagValue::Int(value, _)) if value > 1
-    )
+fn nh_multimap_status(record: &bam::Record) -> Option<bool> {
+    match record.tags().get(b"NH") {
+        Some(TagValue::Int(value, _)) => Some(value > 1),
+        _ => None,
+    }
+}
+
+fn pair_is_multimapped_htseq_compatible(
+    first: Option<&bam::Record>,
+    second: Option<&bam::Record>,
+) -> bool {
+    // HTSeq 2.1.2 checks both NH tags inside one try/except block. If mate 1
+    // exists but lacks NH, its KeyError exits the block before mate 2 is
+    // inspected. Preserve that behavior for count compatibility.
+    if let Some(record) = first {
+        match nh_multimap_status(record) {
+            Some(true) => return true,
+            Some(false) => {}
+            None => return false,
+        }
+    }
+
+    second
+        .and_then(nh_multimap_status)
+        .unwrap_or(false)
 }
 
 fn should_skip_pair(
@@ -826,8 +846,7 @@ fn should_skip_pair(
         return true;
     }
 
-    let multimapped = first.map(record_is_multimapped).unwrap_or(false)
-        || second.map(record_is_multimapped).unwrap_or(false);
+    let multimapped = pair_is_multimapped_htseq_compatible(first, second);
     if multimapped {
         *counts
             .entry("__alignment_not_unique".to_string())
