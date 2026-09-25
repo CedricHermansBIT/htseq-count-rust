@@ -290,6 +290,7 @@ struct Args {
         short = "i",
         long = "idattr",
         default_value = "gene_id",
+        number_of_values = 1,
         help = "GTF attribute to be used as feature ID (default, suitable for Ensembl GTF files: gene_id). All feature of the right type (see -t option) within the same GTF
     attribute will be added together. The typical way of using this option is to count all exonic reads from each gene and add the exons but other uses are possible
     as well. You can call this option multiple times: in that case, the combination of all attributes separated by colons (:) will be used as a unique identifier,
@@ -507,7 +508,7 @@ fn should_skip_record(
     args: &Args,
     sender: &mpsc::Sender<FeatureType>,
 ) -> bool {
-    if record.ref_id() < 0 {
+    if !record.flag().is_mapped() || record.ref_id() < 0 {
         _ = sender.send(FeatureType::NotAligned);
         *counts.entry("__not_aligned".to_string()).or_insert(0.0) += 1.0;
         return true;
@@ -701,9 +702,9 @@ fn count_reads(reads_reader: &mut ReadsReader, counter: &mut i32, counts: &mut H
                         },
                         "fraction" => {
                             // we increment each feature name by 1 divided by the amount of unique feature names
-                            let fractional_count = 1.0 / feature_name_len as f32;
+                            let fractional_count = 1.0 / feature_name_len as f64;
                             for feature_name in unique_feature_names.clone() {
-                                *counts.entry(feature_name.clone()).or_insert(0.0) += fractional_count as f64;
+                                *counts.entry(feature_name.clone()).or_insert(0.0) += fractional_count;
                             }
                         },
                         "random" => {
