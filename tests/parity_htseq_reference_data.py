@@ -57,6 +57,13 @@ def main():
         [],
     ))
 
+    fixtures.append((
+        "upstream_paired_position_sorted",
+        ref / "SRR001432_head_sorted.bam",
+        ref / "bamfile_no_qualities.gtf",
+        ["-r", "pos", "-s", "no"],
+    ))
+
     yeast_gz = ref / "Saccharomyces_cerevisiae.SGD1.01.56.gtf.gz"
     with tempfile.TemporaryDirectory(prefix="htseq-ref-") as td:
         yeast_gtf = Path(td) / "yeast.gtf"
