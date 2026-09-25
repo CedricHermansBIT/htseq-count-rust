@@ -340,6 +340,15 @@ def xf_rows(path, mode="r"):
     return rows
 
 
+def xf_tag_lists(path, mode="r"):
+    rows = []
+    with pysam.AlignmentFile(str(path), mode) as bam:
+        for rec in bam.fetch(until_eof=True):
+            xfs = [value for tag, value in rec.get_tags() if tag == "XF"]
+            rows.append((rec.query_name, rec.flag, rec.reference_start, xfs))
+    return rows
+
+
 def test_samout(repo, rust, htseq, root, gtf, sam1, sam2, paired):
     # Single-end and multiple samout destinations.
     rust_a = root / "rust_a.sam"
@@ -447,8 +456,12 @@ def test_samout(repo, rust, htseq, root, gtf, sam1, sam2, paired):
     ], repo)
     require_ok("Rust multimapper samout", rr)
     require_ok("HTSeq multimapper samout", hr)
-    if xf_rows(rust_multi) != xf_rows(ht_multi):
-        raise AssertionError("multimapper --samout XF assignments differ")
+    if xf_tag_lists(rust_multi) != xf_tag_lists(ht_multi):
+        raise AssertionError(
+            f"multimapper --samout XF tags differ\n"
+            f"rust={xf_tag_lists(rust_multi)}\n"
+            f"htseq={xf_tag_lists(ht_multi)}"
+        )
     print("[ OK ] multimapper samout")
 
 
