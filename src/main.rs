@@ -4,7 +4,7 @@ use feature::Feature;
 use intervaltree::IntervalTree;
 use interval::Interval;
 use std::cmp::{max, min};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 use std::sync::mpsc;
@@ -306,6 +306,23 @@ struct Args {
     // Name and type of the gtf file
     #[arg(value_name = "gtf")]
     gtf: String,
+
+    // Input ordering for paired-end data
+    #[arg(
+        short = 'r',
+        long = "order",
+        default_value = "name",
+        value_parser = ["name", "pos"],
+        help = "Sorting order for paired-end input: query-name grouped ('name') or coordinate sorted ('pos'). Ignored for single-end data."
+    )]
+    order: String,
+
+    #[arg(
+        long = "max-reads-in-buffer",
+        default_value = "30000000",
+        help = "Maximum number of unmatched mate keys buffered for coordinate-sorted paired-end input."
+    )]
+    max_buffer_size: usize,
 
     // Secondary alignment mode
     #[arg(long = "secondary-alignments", default_value = "ignore", value_parser = ["score", "ignore"], help = "Whether to score secondary alignments (0x100 flag)")]
