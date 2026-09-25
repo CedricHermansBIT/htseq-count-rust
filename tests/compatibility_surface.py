@@ -162,10 +162,11 @@ def test_tabular(repo, rust, htseq, root, gtf, sam1, sam2):
             [
                 "-s","no",
                 "--additional-attr","gene_name",
+                "--additional-attr","note",
                 "--add-chromosome-info",
                 str(sam1),str(gtf),
             ],
-            1, 2,
+            1, 3,
         ),
         (
             "feature-query",
