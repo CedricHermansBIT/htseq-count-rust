@@ -1,63 +1,102 @@
 # htseq-count-rust
 
-This is a Rust implementation of the `htseq-count` tool from the HTSeq package. It is a tool for counting the number of reads mapping to each feature in a GFF file. It is designed to be used with the output of a read aligner such as STAR or HISAT2.
+A Rust implementation of `htseq-count` for counting aligned reads or read pairs against GTF/GFF features. The goal is count compatibility with HTSeq while keeping BAM/SAM processing fast and memory-efficient.
 
-This implementation is designed to be faster than the original Python implementation, but it is not yet feature complete. It currently only supports single-end reads and only one idattr.
+The implementation currently supports single-end and paired-end SAM/BAM input, all three HTSeq overlap modes, stranded counting, repeated feature types and ID attributes, multimapper handling, and secondary/supplementary alignment controls.
 
 ## Installation
 
-To install the tool, you will need to have Rust installed. The best thing is to build the tool from source:
+Build from source with a recent stable Rust toolchain:
 
 ```bash
 git clone https://github.com/CedricHermansBIT/htseq-count-rust
 cd htseq-count-rust
-cargo build --release
+cargo build --release --locked
 ```
 
-This will create a binary in `target/release/htseq-count-rust`. You can copy this binary to a location in your PATH, or you can run it directly from the `target/release` directory.
+The binary is created at `target/release/htseq_count_rust`.
 
 ## Usage
 
-The tool is used in the same way as the original `htseq-count` tool. You need to provide a GTF file and a SAM/BAM file. The SAM/BAM file can be piped in from a read aligner such as STAR or HISAT2. For example:
-
 ```bash
-# Simple usage
-htseq-count-rust alignments.bam genes.gtf
+# Single-end
+htseq_count_rust -s no alignments.bam genes.gtf
 
-# With options
-htseq-count-rust -s no -t exon -i gene_id -m intersection-strict -d , -a 10 -n 8 --nonunique all --secondary-alignments ignore --supplementary-alignments ignore -o alignments_out.sam alignments.bam genes.gtf
+# Paired-end, query-name grouped input
+htseq_count_rust -r name -s reverse alignments.name.bam genes.gtf
+
+# Paired-end, coordinate-sorted input
+htseq_count_rust -r pos -s reverse alignments.sorted.bam genes.gtf
 ```
 
-Note: currently, only one SAM/BAM file can be provided. If you want to run the tool on multiple files, you will need to run them separately.
+Only one alignment file is processed per invocation.
 
-### Options
+### Main options
 
-The following options are currently supported:
+- `-m, --mode`: `union`, `intersection-strict`, or `intersection-nonempty`. Default: `union`.
+- `-s, --stranded`: `yes`, `no`, or `reverse`. Default: `yes`.
+- `-t, --type`: feature type to count. Default: `exon`. May be supplied multiple times.
+- `-i, --idattr`: GTF/GFF attribute used as the feature ID. Default: `gene_id`. May be supplied multiple times; values are joined with `:`, matching HTSeq.
+- `-a, --minaqual`: minimum MAPQ. Default: `10`.
+- `--nonunique`: `none`, `all`, `fraction`, or `random`. Default: `none`.
+- `--secondary-alignments`: `ignore` or `score`. Default: `ignore`.
+- `--supplementary-alignments`: `ignore` or `score`. Default: `ignore`.
+- `-r, --order`: paired-end input order, `name` or `pos`. Default: `name`. Ignored for single-end input.
+- `--max-reads-in-buffer`: maximum number of unmatched mate keys retained for coordinate-sorted paired-end data. Default: `30000000`.
+- `-n, --threads`: BAM decompression threads. Counting itself is currently single-threaded.
+- `-c, --counts_output`: write counts to a file instead of stdout.
+- `-o, --samout`: annotate single-end SAM output with `XF`. Paired-end `--samout` is not implemented yet.
+- `-d, --delimiter`: output delimiter. Default: tab.
+- `--extended-output`: also print the calculated number of uniquely mapped reads/fragments.
 
-- `-m` | `--mode`:     Mode. One of `union`, `intersection-strict`, or `intersection-nonempty`. Default is `union`. Note that intersection-nonempty does not fully give the same results as the original `htseq-count` tool.
-- `-s` | `--stranded`: Strandedness. One of `yes`, `no`, or `reverse`. Default is `yes`.
-- `-t` | `--type`:     Feature type. Default is `exon`.
-- `-i` | `--idattr`:   Attribute to use as feature ID. Default is `gene_id`.
-- `-a` | `--minaqual`: Read mapping quality. Reads with mapping quality less than this value will be ignored. Default is 10.
-- `-n` | `--threads`:  Number of threads to use. Default is 4. Note that this is mainly for decompression of BAM files, and the actual counting is single-threaded. An additional thread is always used with the -o option for writing output to a SAM file.
-- `-o` | `--samout`:   Write out all SAM alignment records into a SAM file. Each record will get an additional `XF` tag with the feature ID and the feature type.
-- `-d` | `--delimiter`: Delimiter for feature IDs. Default is `\t`.
-- `--nonunique`: One of `none`, `all`, `fraction` or `random`. How to handle non-unique features. Default is `none`.
-- `--secondary-alignments`: One of `score` or `ignore`. Treat secondary alignments as distinct records. Default is to score them.
-- `--supplementary-alignments`: One of `score` or `ignore`. Treat supplementary alignments as distinct records. Default is to score them.
+## Paired-end implementation
+
+Two streaming strategies are used rather than loading all read names into memory:
+
+- With `--order name`, only the current query-name group is retained. Alignments are paired using reciprocal mate status and coordinates, following HTSeq's name-sorted pairing behavior.
+- With `--order pos`, unmatched records are kept in a hash map keyed by query name, read number, alignment position, mate position and template length. A record is removed as soon as its reciprocal mate is encountered. This follows the same general bounded-buffer strategy used by HTSeq for position-sorted input.
+
+Secondary and supplementary records are removed before entering the pairing buffer when both are configured as `ignore`. Missing mates are still counted using the mate that is available, matching HTSeq.
+
+## HTSeq compatibility testing
+
+The `diagnostics` branch contains differential tests that run this binary and HTSeq 2.1.2 on the same generated input and compare every feature and special count.
+
+Coverage includes:
+
+- CIGAR `M`, `=`, `X`, insertions, deletions, skips and soft clipping
+- `union`, `intersection-strict`, and `intersection-nonempty`
+- stranded, unstranded and reverse-stranded counting
+- repeated `-t` and `-i`
+- MAPQ and `NH` handling
+- secondary and supplementary alignments
+- name-grouped and coordinate-sorted paired-end input
+- missing and unmapped mates
+- deterministic randomized differential cases
+- official HTSeq test fixtures, including its position-sorted paired BAM
+
+One unusual behavior is deliberately retained for compatibility with HTSeq 2.1.2: for paired reads, if mate 1 exists but has no `NH` tag, HTSeq's current implementation does not inspect an `NH` tag that is present only on mate 2. The Rust implementation mirrors that behavior so counts remain comparable.
+
+Randomized cases where HTSeq itself raises an exception are reported as reference errors and are not treated as evidence of a Rust mismatch.
+
+## Dependency status
+
+The direct dependencies are kept at their current stable releases:
+
+- `clap 4.6.7` with derive support
+- `bam 0.1.4` (this is still the newest release of the pure-Rust `bam` crate)
+- `rand 0.10.3`
+
+`Cargo.lock` is committed and CI builds with `--locked`.
 
 ## Performance
 
-In the future, better performance comparisson will be made. For now, the following is a simple comparisson of the original `htseq-count` and this implementation.
+An older benchmark used SRR5724993 aligned to GRCh38 with a GTF containing 1,065,949 genes and 58,663,336 alignment records:
 
-### Test data
-SRR5724993
-The test data consists of a GTF file with 1,065,949 genes and a SAM file with 58,663,336 reads. The BAM file is derived from SRR5724993 and was aligned with HISAT2 to the human genome (GRCh38).
+| Tool | Time | Peak memory |
+| --- | ---: | ---: |
+| htseq-count | ~40 min | 1749 MB virtual, 150 MB resident |
+| htseq-count-rust with `-o` | 3 min 15 s | 1947 MB virtual, 1351 MB resident |
+| htseq-count-rust without `-o` | 1 min 54 s | 467 MB virtual, 135 MB resident |
 
-Note that memory usage highly depends on the write speed of the disk. Since the file is processed so fast, the writer can not keep up and the data to write is buffered in memory. This is why the memory usage is sometimes higher than the peak memory usage of the original `htseq-count` tool.
-
-Tool | Time | Memory (peak)
---- | --- | ---
-htseq-count | +-40m | 1749Mb Virtual, 150Mb Resident
-htseq-count-rust | 3m15s | 1947Mb Virtual, 1351Mb Resident 
-htseq-count-rust (without -o) | 1m54s | 467M Virtual, 135M Resident
+These figures predate the current parity and paired-end work and should be rerun before using them as a current benchmark.
