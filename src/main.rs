@@ -1,4 +1,3 @@
-use bam::record::cigar::Operation;
 use bam::record::tags::TagValue;
 use bam::{RecordReader,BamReader, RecordWriter, SamReader, SamWriter};
 use feature::Feature;
@@ -123,9 +122,12 @@ fn main() {
     if args.export_feature_tree.is_some() {
         eprintln!("Exporting feature trees as dot files...");
         let mut file = File::create(args.export_feature_tree.clone().unwrap()).expect("Unable to create file");
-        for (chr, tree) in gtf.iter().enumerate() {
-            // top node for each tree is the chromosome
-            let _ = tree.as_ref().unwrap().top_node.clone().unwrap().write_structure(&mut file, 0, reference_names[chr].clone());
+        for (chr, tree) in gtf.iter().enumerate().take(reference_names.len()) {
+            if let Some(tree) = tree {
+                if let Some(top_node) = &tree.top_node {
+                    let _ = top_node.clone().write_structure(&mut file, 0, reference_names[chr].clone());
+                }
+            }
         }
     }
     
@@ -287,7 +289,7 @@ struct Args {
     #[structopt(
         short = "i",
         long = "idattr",
-        default_value = "gene_name",
+        default_value = "gene_id",
         help = "GTF attribute to be used as feature ID (default, suitable for Ensembl GTF files: gene_id). All feature of the right type (see -t option) within the same GTF
     attribute will be added together. The typical way of using this option is to count all exonic reads from each gene and add the exons but other uses are possible
     as well. You can call this option multiple times: in that case, the combination of all attributes separated by colons (:) will be used as a unique identifier,
@@ -304,11 +306,11 @@ struct Args {
     gtf: String,
 
     // Secondary alignment mode
-    #[structopt(long = "secondary-alignments", default_value = "score", possible_values = &["score", "ignore"], help = "Whether to score secondary alignments (0x100 flag)")]
+    #[structopt(long = "secondary-alignments", default_value = "ignore", possible_values = &["score", "ignore"], help = "Whether to score secondary alignments (0x100 flag)")]
     secondary_alignments: String,
 
     // Supplementary alignment mode
-    #[structopt(long = "supplementary-alignments", default_value = "score", possible_values = &["score", "ignore"], help = "Whether to score supplementary alignments (0x800 flag)")]
+    #[structopt(long = "supplementary-alignments", default_value = "ignore", possible_values = &["score", "ignore"], help = "Whether to score supplementary alignments (0x800 flag)")]
     supplementary_alignments: String,
 
     // Option to also output a total count of uniquely mapped reads
@@ -381,83 +383,122 @@ fn prepare_count_hashmap(gtf: &Vec<Option<IntervalTree>>) -> HashMap<String, f64
     counts
 }
 
+fn parse_feature_attributes(raw: &str) -> HashMap<String, String> {
+    let mut result = HashMap::new();
+    for raw_attr in raw.split(';') {
+        let attr = raw_attr.trim();
+        if attr.is_empty() {
+            continue;
+        }
+
+        let mut parts = attr.splitn(2, |c: char| c.is_whitespace() || c == '=');
+        let key = parts.next().unwrap_or("").trim();
+        let value = parts.next().unwrap_or("").trim().trim_matches('"');
+        if !key.is_empty() {
+            result.insert(key.to_string(), value.to_string());
+        }
+    }
+    result
+}
+
 fn read_gtf(file_path: &str, feature_type_filter: &str, ref_names_to_id: &HashMap<String, i32>, args: &Args) -> Vec<Option<IntervalTree>> {
     let mut map: HashMap<i32, Vec<Interval>> = HashMap::new();
     let file = File::open(file_path).expect("Could not open this file");
     let mut reader = BufReader::new(file);
     let mut counter = 0;
     let mut line = String::default();
-    //TODO: deal with -i option correctly
-    // For now we just take the first -i option as the feature name
-    let attribute = args.i.first().unwrap();
+
+    let mut chromosome_ids = ref_names_to_id.clone();
+    let mut next_chr_id = chromosome_ids.len() as i32;
+
     while reader.read_line(&mut line).unwrap() > 0 {
         counter += 1;
         if counter % 100000 == 0 {
             eprintln!("{} GFF lines processed.", counter);
         }
-    
-        if line.starts_with('#') {
+
+        if line.starts_with('#') || line.trim().is_empty() {
             line.clear();
             continue;
         }
-        let mut fields = line.split('\t');
-        let chr_id = ref_names_to_id.get(fields.next().unwrap()).unwrap();
-        //eprintln!("chr_id: {}", chr_id);
-        let feature_name = fields.nth(1).unwrap();
-        //eprintln!("feature_name: {}", feature_name);
 
+        let fields: Vec<&str> = line.trim_end_matches(['\r', '\n']).split('\t').collect();
+        if fields.len() != 9 {
+            panic!(
+                "Invalid GTF/GFF line {}: expected 9 tab-separated fields, found {}",
+                counter,
+                fields.len()
+            );
+        }
 
-        let start = fields.next().unwrap().parse::<i32>().unwrap();
-        let end = fields.next().unwrap().parse::<i32>().unwrap();
-        let strand = fields.nth(1).unwrap();
-        if feature_name != feature_type_filter {
+        if fields[2] != feature_type_filter {
             line.clear();
             continue;
         }
-        let attributes = fields.nth(1).unwrap();
-        //eprintln!("attributes: {}", attributes);
 
+        let chr_name = fields[0];
+        let chr_id = match chromosome_ids.get(chr_name) {
+            Some(id) => *id,
+            None => {
+                let id = next_chr_id;
+                chromosome_ids.insert(chr_name.to_string(), id);
+                next_chr_id += 1;
+                id
+            }
+        };
 
-        let name = attributes.split(';')
-            .find(|&attr| attr.contains(attribute))
-            .unwrap_or("")
-            .trim()
-            .strip_prefix(format!("{} ", attribute).as_str())
-            .unwrap_or("")
-            .trim_matches('"');
+        let start = fields[3].parse::<i32>().unwrap();
+        let end = fields[4].parse::<i32>().unwrap();
+        let strand = fields[6].chars().next().unwrap_or('.');
 
-        let feature = Feature::new(name.to_string(), *chr_id, min(start, end), max(start, end), strand.chars().next().unwrap());
+        if args.stranded != "no" && strand != '+' && strand != '-' {
+            panic!(
+                "Feature on line {} has strand '{}', but stranded counting requires '+' or '-'",
+                counter,
+                strand
+            );
+        }
 
+        let parsed_attributes = parse_feature_attributes(fields[8]);
+        let mut id_values = Vec::with_capacity(args.i.len());
+        for attribute in &args.i {
+            match parsed_attributes.get(attribute) {
+                Some(value) => id_values.push(value.clone()),
+                None => panic!(
+                    "Feature on line {} does not contain a '{}' attribute",
+                    counter,
+                    attribute
+                ),
+            }
+        }
+        let name = id_values.join(":");
 
-        map.entry(*chr_id).or_default().push(Interval::new(start, end, Some(feature)));
+        let feature = Feature::new(
+            name,
+            chr_id,
+            min(start, end),
+            max(start, end),
+            strand,
+        );
+        map.entry(chr_id)
+            .or_default()
+            .push(Interval::new(min(start, end), max(start, end), Some(feature)));
         line.clear();
     }
-    //let node = Node::from_intervals(intervals);
-    // print the center node (withouth the children)
-    // construct the tree
-    // let tree= IntervalTree::from_tuples(tuples);
-    // let top_node = tree.top_node.unwrap();
-    // eprintln!("tree: center: {}, depth: {}, balance: {}", top_node.x_center, top_node.depth, top_node.balance);
-    // eprintln!("Boundary table: {:?}", tree.boundary_table);
 
     eprintln!("{} GFF lines processed.", counter);
     eprint!("Creating IntervalTree for each chromosome...");
-    // prepopulate the map with empty trees
-    let mut result: Vec<Option<IntervalTree>> = Vec::with_capacity(ref_names_to_id.len());
-    //eprintln!("{:?} chromosomes found.", ref_names_to_id.keys());
-    for _ in 0..ref_names_to_id.len() {
+
+    let mut result: Vec<Option<IntervalTree>> = Vec::with_capacity(chromosome_ids.len());
+    for _ in 0..chromosome_ids.len() {
         result.push(None);
     }
 
     for (chr, intervals) in map {
-        let tree = IntervalTree::new(Some(intervals));
-        result[chr as usize] = Some(tree);
-        
+        result[chr as usize] = Some(IntervalTree::new(Some(intervals)));
     }
     eprintln!("done.");
-
-    //eprintln!("The amount of not empty trees: {}", result.iter().filter(|x| x.is_some()).count());
-    result    
+    result
 }
 
 fn should_skip_record(
@@ -466,39 +507,40 @@ fn should_skip_record(
     args: &Args,
     sender: &mpsc::Sender<FeatureType>,
 ) -> bool {
-    // Skip all reads that are not aligned
     if record.ref_id() < 0 {
         _ = sender.send(FeatureType::NotAligned);
         *counts.entry("__not_aligned".to_string()).or_insert(0.0) += 1.0;
         return true;
     }
-    // Skip all reads that are secondary alignments
+
     if args.secondary_alignments == "ignore" && record.flag().all_bits(0x100) {
         _ = sender.send(FeatureType::None);
         return true;
     }
-    // Skip all reads that are supplementary alignments
+
     if args.supplementary_alignments == "ignore" && record.flag().all_bits(0x800) {
         _ = sender.send(FeatureType::None);
         return true;
     }
-    // Skip all reads with MAPQ alignment quality lower than the given minimum value
-    if record.mapq() < args.a {
-        _ = sender.send( FeatureType::TooLowaQual);
-        *counts.entry("__too_low_aQual".to_string()).or_insert(0.0) += 1.0;
-        return true;
-    }
-    // Skip all reads that have an optional field "NH" with value > 1
+
     if let Some(TagValue::Int(i, _)) = record.tags().get(b"NH") {
         if i > 1 {
-            _ = sender.send( FeatureType::AlignmentNotUnique);
             *counts
                 .entry("__alignment_not_unique".to_string())
                 .or_insert(0.0) += 1.0;
-            // TODO: in nonunique mode "all" we should also increment the features for each alignment (process the read anyways), but we should check what happens if the read is also ambiguous
-            return true;
+            if args.nonunique == "none" {
+                _ = sender.send(FeatureType::AlignmentNotUnique);
+                return true;
+            }
         }
     }
+
+    if record.mapq() < args.a {
+        _ = sender.send(FeatureType::TooLowaQual);
+        *counts.entry("__too_low_aQual".to_string()).or_insert(0.0) += 1.0;
+        return true;
+    }
+
     false
 }
 
@@ -511,16 +553,7 @@ fn print_output(counts: HashMap<String, f64>, args: Args, counter: i32) {
         if key.starts_with("__") {
             continue;
         }
-        if args.nonunique != "fraction" {
-            println!("{}{}{}", key, args.delimiter, counts[key]);
-            continue;
-        }
-        // print the fraction as a float with 1 decimal if not 0
-        if counts[key] == 0.0 {
-            println!("{}{}{}", key, args.delimiter, counts[key]);
-            continue;
-        }
-        println!("{}{}{:.1}", key, args.delimiter, counts[key]);
+        println!("{}{}{}", key, args.delimiter, counts[key]);
     }
     println!("__no_feature{}{}", args.delimiter, counts["__no_feature"]);
     println!("__ambiguous{}{}", args.delimiter, counts["__ambiguous"]);
@@ -611,36 +644,29 @@ fn count_reads(reads_reader: &mut ReadsReader, counter: &mut i32, counts: &mut H
         let ref_id = record.ref_id() as usize;
 
         if gtf[ref_id].is_some() {
-            let mut start_pos = record.start() +1;
-            //let end_pos = record.calculate_end() + 1;
+            let mut reference_pos = record.start() + 1;
             let features = &gtf[ref_id].as_ref().unwrap();
             let cigar = record.cigar();
+
             for cig in cigar.iter() {
-                if cig.1 != Operation::AlnMatch {
-                    // Skip all cigar elements that are not matches, but add the length to the start position
-                    // Soft clips are not added to the start position
-                    // if record.name() == debug_read_bytes{
+                let length = cig.0 as i32;
+                let operation = cig.1;
 
-                    //     eprintln!("start_pos: {}, cig:{:?}", start_pos, cig);
-                    // }
-                    match cig.1 {
-                        Operation::Soft => {},
-                        Operation::Insertion => start_pos += 1,
-                        _ => start_pos += cig.0 as i32 + 1,
-                    }
-                    continue;
+                if operation.is_match() && length > 0 {
+                    let block_end = reference_pos + length - 1;
+                    processing_function(
+                        features,
+                        reference_pos,
+                        block_end,
+                        record.flag().is_reverse_strand(),
+                        &mut overlapping_features,
+                        args,
+                    );
                 }
-                let partial_end_pos = start_pos + cig.0 as i32 -1 ;
-                // if record.name() == debug_read_bytes {
 
-                //     eprintln!("start_pos: {}, end_pos: {}, cig:{:?}", start_pos, partial_end_pos, cig);
-                // }
-                
-                processing_function(features,  start_pos, partial_end_pos, record.flag().is_reverse_strand(), &mut overlapping_features, args);
-                // if record.name() == debug_read_bytes{
-                //     eprintln!("overlapping_features: {:?}", overlapping_features);
-                // }
-                start_pos = partial_end_pos;
+                if operation.consumes_ref() {
+                    reference_pos += length;
+                }
             }
 
             // get the unique feature_names from the overlapping features, also filter out the empty names
@@ -712,36 +738,54 @@ fn process_union_read(features: &IntervalTree, start_pos: i32, end_pos: i32, str
     
 }
 
-fn process_intersection_nonempty_read(features: &IntervalTree, start_pos: i32, end_pos: i32, strand: bool, overlapping_features: &mut Vec<Vec<Feature>>, args: &Args) {
-    //todo!("process_partial_read for intersection-nonempty");
-    let new_overlap = features.overlap(start_pos, end_pos);
-    let new_contained = features.contains(start_pos, end_pos);
+fn process_intersection_nonempty_read(
+    features: &IntervalTree,
+    start_pos: i32,
+    end_pos: i32,
+    strand: bool,
+    overlapping_features: &mut Vec<Vec<Feature>>,
+    args: &Args,
+) {
+    let overlaps = features.overlap(start_pos, end_pos);
+    let read_strand = if strand { '-' } else { '+' };
 
-    // if contained is not empty, we add it to the list, otherwise we add the overlap
-    let strand = if strand { '-' } else { '+' };
-    if new_contained.len() > 0 {
-        add_stranded_features(new_contained, strand, overlapping_features, args);
-    } else {
-        // check that the overlapping features also overlap each other, if not, then we should not count the read as feature but as no_feature
-        if new_overlap.len() > 1 {
-            let mut iter = new_overlap.iter();
-            let first = iter.next().unwrap();
-            let mut all_overlap = true;
-            for interval in iter {
-                if !first.overlaps(interval) && first.name() != interval.name() {
-                    all_overlap = false;
-                    break;
-                }
-            }
-            if all_overlap {
-                add_stranded_features(new_overlap, strand, overlapping_features, args);
-            } else {
-                overlapping_features.push(Vec::new());
-            }
-        } else {
-            add_stranded_features(new_overlap, strand, overlapping_features, args);
+    let relevant: Vec<&Interval> = overlaps
+        .into_iter()
+        .filter(|interval| {
+            let feature = interval.data.as_ref().unwrap();
+            feature_matches_strand(feature, read_strand, args)
+        })
+        .collect();
+
+    if relevant.is_empty() {
+        return;
+    }
+
+    let mut boundaries = vec![start_pos, end_pos + 1];
+    for interval in &relevant {
+        boundaries.push(max(start_pos, interval.start));
+        boundaries.push(min(end_pos, interval.end) + 1);
+    }
+    boundaries.sort_unstable();
+    boundaries.dedup();
+
+    for window in boundaries.windows(2) {
+        let step_start = window[0];
+        let step_end_exclusive = window[1];
+        if step_start >= step_end_exclusive || step_start > end_pos {
+            continue;
         }
-        //add_stranded_features(new_overlap, strand, overlapping_features, args);
+
+        let mut step_features = Vec::new();
+        for interval in &relevant {
+            if interval.start <= step_start && interval.end >= step_start {
+                step_features.push(interval.data.as_ref().unwrap().clone());
+            }
+        }
+
+        if !step_features.is_empty() {
+            overlapping_features.push(step_features);
+        }
     }
 }
 
@@ -797,27 +841,41 @@ fn filter_ambiguity_intersection_strict(
 fn filter_ambiguity_intersection_nonempty(
     overlapping_features: &[Vec<Feature>],
 ) -> Vec<String> {
+    let mut nonempty_steps = overlapping_features.iter().filter(|features| !features.is_empty());
 
-    // this is now basically a union, except for the case that multiple parts have different features that do not occur in both parts
-    // first loop through the vec and take the intersection of all the features, if it is empty, return an empty vec
-    let mut unique_feature_names: HashSet<String> = HashSet::new();
-    for features in overlapping_features.iter() {
-        let feature_names: HashSet<String> = features.iter().map(|x| x.name().to_string()).collect();
-        if unique_feature_names.is_empty() {
-            unique_feature_names = feature_names;
-        } else {
-            if feature_names.len() != 0 {
-                unique_feature_names = unique_feature_names.intersection(&feature_names).map(|x| x.to_string()).collect();
-            }
+    let first = match nonempty_steps.next() {
+        Some(features) => features,
+        None => return Vec::new(),
+    };
+
+    let mut feature_names: HashSet<String> =
+        first.iter().map(|feature| feature.name().to_string()).collect();
+
+    for features in nonempty_steps {
+        let current: HashSet<String> =
+            features.iter().map(|feature| feature.name().to_string()).collect();
+        feature_names = feature_names.intersection(&current).cloned().collect();
+
+        if feature_names.is_empty() {
+            return Vec::new();
         }
     }
-    if unique_feature_names.is_empty() {
-        return Vec::new();
-    }
-    return unique_feature_names.into_iter().collect();
+
+    feature_names
+        .into_iter()
+        .filter(|name| !name.is_empty())
+        .collect()
 }
 
-    
+fn feature_matches_strand(feature: &Feature, strand: char, args: &Args) -> bool {
+    match args.stranded.as_str() {
+        "yes" => feature.strand() == strand,
+        "reverse" => feature.strand() != strand,
+        "no" => true,
+        _ => panic!("Invalid strandedness"),
+    }
+}
+
 
 fn add_stranded_features(new_overlap: Vec<&Interval>, strand: char, overlapping_features: &mut Vec<Vec<Feature>>, args: &Args) {
     // add empty Vec to the overlapping_features list
@@ -826,24 +884,8 @@ fn add_stranded_features(new_overlap: Vec<&Interval>, strand: char, overlapping_
     if new_overlap.len() > 0 {
         for overlap in new_overlap {
             let feature = overlap.data.as_ref().unwrap();
-            match args.stranded.as_str() {
-                "yes" => {
-                    //eprintln!("feature: {:?}", feature);
-                    if feature.strand() == strand {
-                        overlapping_features[index].push(feature.clone());
-                    }
-                },
-                "reverse" => {
-                    if feature.strand() != strand {
-                        overlapping_features[index].push(feature.clone());
-                    }
-                },
-                "no" => {
-                    overlapping_features[index].push(feature.clone());
-                },
-                _ => {
-                    panic!("Invalid strandedness");
-                }
+            if feature_matches_strand(feature, strand, args) {
+                overlapping_features[index].push(feature.clone());
             }
         }
     }
