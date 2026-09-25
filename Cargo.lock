@@ -431,7 +431,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "htseq_count_rust"
+name = "tallyseq"
 version = "0.1.0"
 dependencies = [
  "ahash",
