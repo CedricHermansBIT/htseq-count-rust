@@ -457,9 +457,11 @@ fn read_gtf(file_path: &str, feature_type_filter: &[String], ref_names_to_id: &H
     let parse_started = Instant::now();
     let mut map: HashMap<i32, Vec<Interval>> = HashMap::new();
     let file = File::open(file_path).expect("Could not open this file");
-    let mut reader = BufReader::new(file);
+    // GTF/GFF files are large sequential text streams. A larger buffer reduces
+    // read syscalls, while reusing a preallocated line avoids early growth.
+    let mut reader = BufReader::with_capacity(1024 * 1024, file);
     let mut counter = 0;
-    let mut line = String::default();
+    let mut line = String::with_capacity(512);
 
     let mut chromosome_ids = ref_names_to_id.clone();
     let mut next_chr_id = chromosome_ids.len() as i32;
