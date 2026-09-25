@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Real-data differential benchmark for htseq-count-rust vs HTSeq.
+"""Real-data differential benchmark for TallySeq vs HTSeq.
 
 The benchmark downloads real Pasilla RNA-seq data and its matching Ensembl GTF
 from Zenodo record 61771, verifies published MD5 checksums, and runs a matrix of
@@ -261,7 +261,7 @@ def download_verified(key: str, cache: Path) -> Path:
     print(f"[download] {name}")
 
     req = urllib.request.Request(
-        url, headers={"User-Agent": "htseq-count-rust-benchmark/2.0"}
+        url, headers={"User-Agent": "tallyseq-benchmark/2.0"}
     )
     try:
         with urllib.request.urlopen(req) as response, partial.open("wb") as out:
@@ -619,7 +619,7 @@ def write_markdown(report: dict, path: Path):
         "- Core matrix: single-end and paired-end x union, intersection-strict, and intersection-nonempty x no/yes/reverse strandedness.",
         "- Targeted options: nonunique all/fraction, MAPQ 0, secondary/supplementary score, repeated feature types, repeated ID attributes, and paired position/name ordering.",
         "- nonunique=random is intentionally excluded from exact parity benchmarking because HTSeq and Rust use independent random-number generators, so exact feature assignment is not deterministic across implementations.",
-        "- Paired --samout is not benchmarked because paired SAM annotation is not implemented in htseq-count-rust yet.",
+        "- Paired --samout is not benchmarked because paired SAM annotation is not implemented in TallySeq yet.",
         "",
         "The single-end BAM is reproducibly derived from read 1 of the real paired-end BAM by removing only pairing metadata.",
         "",
@@ -832,7 +832,7 @@ def main():
         "excluded_from_exact_matrix": [
             "nonunique=random: independent RNGs make exact ambiguous-feature "
             "assignment nondeterministic across implementations",
-            "paired samout: not yet implemented in htseq-count-rust",
+            "paired samout: not yet implemented in TallySeq",
         ],
         "rust_binary": str(rust),
         "rust_version": version(str(rust), repo),
