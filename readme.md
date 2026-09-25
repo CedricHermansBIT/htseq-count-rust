@@ -1,6 +1,6 @@
-# htseq-count-rust
+# TallySeq
 
-A Rust implementation of `htseq-count` focused on count compatibility with HTSeq while keeping alignment processing fast and memory-efficient.
+TallySeq is a fast Rust implementation of `htseq-count` semantics, designed as a practical drop-in counting replacement while retaining HTSeq-compatible results and file formats.
 
 The `diagnostics` branch is tested against HTSeq 2.1.2 and supports the main `htseq-count` command-line surface, including multiple input files, single-end and paired-end data, SAM/BAM/CRAM, stdin, compressed annotations, metadata columns, matrix output formats and annotated SAM/BAM output.
 
@@ -14,25 +14,25 @@ cd htseq-count-rust
 cargo build --release --locked
 ```
 
-The binary is created at `target/release/htseq_count_rust`.
+The primary binary is created at `target/release/tallyseq`. Release archives also include an `htseq-count` compatibility copy of the same executable.
 
 ## Usage
 
 ```bash
 # Single alignment file
-htseq_count_rust -s no sample.bam genes.gtf
+tallyseq -s no sample.bam genes.gtf
 
 # Multiple samples in one count table
-htseq_count_rust -n 4 -s no sample1.bam sample2.bam sample3.cram genes.gtf.gz
+tallyseq -n 4 -s no sample1.bam sample2.bam sample3.cram genes.gtf.gz
 
 # Read a single alignment stream from stdin
-samtools view -h sample.bam | htseq_count_rust -s no - genes.gtf
+samtools view -h sample.bam | tallyseq -s no - genes.gtf
 
 # Paired-end, coordinate-sorted input
-htseq_count_rust -r pos -s reverse paired.sorted.bam genes.gtf
+tallyseq -r pos -s reverse paired.sorted.bam genes.gtf
 
 # Include annotation metadata and a header
-htseq_count_rust \
+tallyseq \
   --additional-attr gene_name \
   --add-chromosome-info \
   --with-header \
@@ -97,7 +97,7 @@ Matrix outputs use float32 values, matching HTSeq. `--counts-output-sparse` writ
 `--samout` works for single-end and paired-end data, including name-grouped and position-sorted pairs. One output filename is required for each input alignment file.
 
 ```bash
-htseq_count_rust \
+tallyseq \
   -r pos \
   -o sample1.annotated.bam \
   -o sample2.annotated.bam \
@@ -143,7 +143,7 @@ One unusual behavior is deliberately retained for HTSeq 2.1.2 parity: if paired 
 
 ## Dependencies and reproducible builds
 
-`Cargo.lock` is committed and CI builds with `cargo build --release --locked`.
+`Cargo.lock` is committed and CI builds with `cargo build --release --locked`. Release packaging is validated natively on Linux x86_64/ARM64, macOS x86_64/ARM64, and Windows x86_64.
 
 The implementation uses the lightweight pure-Rust `bam` crate on the normal SAM/BAM hot path. HTSlib is included for CRAM/stdin/autodetection compatibility, and `rust-hdf5` is used for native H5AD/Loom output.
 
@@ -152,7 +152,7 @@ The implementation uses the lightweight pure-Rust `bam` crate on the normal SAM/
 The Graphviz feature-tree export is disabled by default and is not part of normal counting.
 
 ```bash
-htseq_count_rust --export-feature-tree feature_tree.dot reads.bam genes.gtf
+tallyseq --export-feature-tree feature_tree.dot reads.bam genes.gtf
 ```
 
 The older `--export_feature_map` spelling remains as an alias. There is intentionally no `-f` short form because `-f` belongs to HTSeq's deprecated `--format` option.
