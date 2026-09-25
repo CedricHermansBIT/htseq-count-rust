@@ -581,6 +581,7 @@ struct Args {
         short = 'a',
         long = "minaqual",
         default_value = "10",
+        allow_hyphen_values = true,
         help = "Skip all reads with MAPQ alignment quality lower than the given minimum value (default: 10). MAPQ is the 5th column of a SAM/BAM file and its usage depends on the software used to map the reads."
     )]
     a: i32,
