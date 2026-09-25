@@ -15,91 +15,77 @@ pub struct IntervalTree {
 
 impl IntervalTree {
     pub fn new(intervals: Option<Vec<Interval>>) -> Self {
-        if let Some(intervals) = intervals {
-            //eprintln!("creating IntervalTree");
-            // get unique intervals
-            let mut unique_intervals: HashSet<Interval> = HashSet::new();
-            for interval in intervals {
-                unique_intervals.insert(interval);
-            }
-
-            // merge overlapping intervals with same name
-            use std::collections::HashMap;
-
-            // Create a HashMap where the keys are the names of the intervals and the values are vectors of intervals with that name.
-            let mut grouped_intervals: HashMap<(String, char), Vec<Interval>> = HashMap::new();
-            for interval in &unique_intervals {
-                let feature = interval.data.as_ref().unwrap();
-                grouped_intervals
-                    .entry((feature.name().to_string(), feature.strand()))
-                    .or_default()
-                    .push(interval.clone());
-            }
-
-            // For each name in the HashMap, sort the intervals by their start position and then merge the overlapping intervals.
-            for intervals in grouped_intervals.values_mut() {
-                // sort first by start, then by end
-                intervals.sort_by(|a, b| a.start.cmp(&b.start).then(a.end.cmp(&b.end)));
-                let mut i = 0;
-                while i < intervals.len() - 1 {
-                    // if intervals[i].name() == Some("WDSUB1") {
-                    //     eprintln!("interval[i]: {:?}, interval[i+1]: {:?}", intervals[i], intervals[i+1]);
-                    // }
-                    // Note the -1: this is because two features can be directly adjacent. Then we also want to merge them.
-                    if intervals[i].end >= (intervals[i+1].start -1){
-                        // Update the end if the next interval's end is greater than the current interval's end.
-                        // But if it is entirely contained within the current interval, we don't need to do anything except to still remove the fully contained interval.
-                        if intervals[i+1].end >= intervals[i].end {
-                            intervals[i].end = intervals[i+1].end;
-                        }
-                        intervals.remove(i+1);
-                    } else {
-                        i += 1;
-                    }
-                }
-            }
-
-            // Create a new HashSet of intervals from the merged intervals.
-            let mut unique_intervals: HashSet<Interval> = HashSet::new();
-            for intervals in grouped_intervals.values() {
-                for interval in intervals {
-                    unique_intervals.insert(interval.clone());
-                }
-            }
-
-
-            // convert to vector
-            //let unique_intervals: Vec<Interval> = unique_intervals.into_iter().collect();
-            //eprintln!("filtered intervals");
-            // check if intervals are not null
-            // for interval in &unique_intervals {
-            //     if interval.is_null() {
-            //         panic!("IntervalTree: Null Interval objects are not allowed in IntervalTree: {:?}", interval);
-            //     }
-            // }
-            let mut it = IntervalTree {
-                all_intervals: unique_intervals.clone(),
-                top_node: Node::from_intervals(unique_intervals.clone()),
-                boundary_table: BTreeMap::new(),
-            };
-            //eprintln!("created top node");
-
-            for interval in &unique_intervals {
-                it.add_boundaries(interval);
-            }
-
-            it.top_node.as_mut().unwrap().update_max_ends();
-
-            //eprintln!("added boundaries");
-            it
-        }
-        else {
-            IntervalTree {
+        let Some(mut intervals) = intervals else {
+            return IntervalTree {
                 all_intervals: HashSet::new(),
                 top_node: None,
                 boundary_table: BTreeMap::new(),
+            };
+        };
+
+        if intervals.is_empty() {
+            return IntervalTree {
+                all_intervals: HashSet::new(),
+                top_node: None,
+                boundary_table: BTreeMap::new(),
+            };
+        }
+
+        // Group equal feature IDs/strands next to each other. This replaces
+        // the old HashSet -> HashMap<Vec<Interval>> -> HashSet pipeline and
+        // lets us merge in one linear pass after sorting.
+        intervals.sort_unstable_by(|a, b| {
+            let af = a.data.as_ref().unwrap();
+            let bf = b.data.as_ref().unwrap();
+            af.name()
+                .cmp(bf.name())
+                .then(af.strand().cmp(&bf.strand()))
+                .then(a.start.cmp(&b.start))
+                .then(a.end.cmp(&b.end))
+        });
+        intervals.dedup();
+
+        let mut merged: Vec<Interval> = Vec::with_capacity(intervals.len());
+        for interval in intervals {
+            let should_merge = merged.last().map(|last| {
+                let last_feature = last.data.as_ref().unwrap();
+                let feature = interval.data.as_ref().unwrap();
+                last_feature.name() == feature.name()
+                    && last_feature.strand() == feature.strand()
+                    && last.end >= interval.start.saturating_sub(1)
+            }).unwrap_or(false);
+
+            if should_merge {
+                let last = merged.last_mut().unwrap();
+                if interval.end > last.end {
+                    last.end = interval.end;
+                }
+            } else {
+                merged.push(interval);
             }
         }
+
+        // The static tree is queried by genomic position.
+        merged.sort_unstable();
+
+        let all_intervals: HashSet<Interval> = merged.iter().cloned().collect();
+        let top_node = Node::from_sorted_slice(&merged);
+        let mut it = IntervalTree {
+            all_intervals,
+            top_node,
+            boundary_table: BTreeMap::new(),
+        };
+
+        // Keep the legacy boundary table for the older mutation/debug APIs,
+        // although the counting overlap path no longer depends on it.
+        for interval in &merged {
+            it.add_boundaries(interval);
+        }
+
+        if let Some(root) = it.top_node.as_mut() {
+            root.update_max_ends();
+        }
+        it
     }
 
     pub fn from_tuples(tuples: Vec<(i32,i32, Option<Feature>)>) -> IntervalTree {
