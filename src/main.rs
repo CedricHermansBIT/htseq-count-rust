@@ -419,7 +419,7 @@ struct RecordIdentity {
     cigar: Vec<u32>,
 }
 
-type AssignmentStore = Arc<Mutex<HashMap<RecordIdentity, VecDeque<FeatureType>>>>;
+type AssignmentStore = Arc<Mutex<HashMap<RecordIdentity, VecDeque<Vec<FeatureType>>>>>;
 
 fn record_identity(record: &bam::Record) -> RecordIdentity {
     RecordIdentity {
@@ -448,10 +448,10 @@ fn record_identity(record: &bam::Record) -> RecordIdentity {
     }
 }
 
-fn store_record_assignment(
+fn store_record_assignments(
     store: Option<&AssignmentStore>,
     record: &bam::Record,
-    assignment: FeatureType,
+    assignments: Vec<FeatureType>,
 ) {
     if let Some(store) = store {
         store
@@ -459,7 +459,29 @@ fn store_record_assignment(
             .unwrap()
             .entry(record_identity(record))
             .or_default()
-            .push_back(assignment);
+            .push_back(assignments);
+    }
+}
+
+fn store_record_assignment(
+    store: Option<&AssignmentStore>,
+    record: &bam::Record,
+    assignment: FeatureType,
+) {
+    store_record_assignments(store, record, vec![assignment]);
+}
+
+fn store_pair_assignments(
+    store: Option<&AssignmentStore>,
+    first: Option<&bam::Record>,
+    second: Option<&bam::Record>,
+    assignments: Vec<FeatureType>,
+) {
+    if let Some(record) = first {
+        store_record_assignments(store, record, assignments.clone());
+    }
+    if let Some(record) = second {
+        store_record_assignments(store, record, assignments);
     }
 }
 
@@ -469,12 +491,7 @@ fn store_pair_assignment(
     second: Option<&bam::Record>,
     assignment: FeatureType,
 ) {
-    if let Some(record) = first {
-        store_record_assignment(store, record, assignment.clone());
-    }
-    if let Some(record) = second {
-        store_record_assignment(store, record, assignment);
-    }
+    store_pair_assignments(store, first, second, vec![assignment]);
 }
 
 fn write_annotated_samout(
@@ -508,13 +525,15 @@ fn write_annotated_samout(
             Err(e) => panic!("{}", e),
         }
 
-        let assignment = assignments
+        let record_assignments = assignments
             .lock()
             .unwrap()
             .get_mut(&record_identity(&record))
             .and_then(VecDeque::pop_front)
-            .unwrap_or(FeatureType::None);
-        record.tags_mut().push_string(b"XF", &assignment.as_bytes());
+            .unwrap_or_else(|| vec![FeatureType::None]);
+        for assignment in record_assignments {
+            record.tags_mut().push_string(b"XF", &assignment.as_bytes());
+        }
         writer.write(&record).unwrap();
     }
     drop(writer);
@@ -1407,12 +1426,28 @@ fn count_single_record(
     let mut overlapping_features = Vec::with_capacity(3);
     if !add_record_blocks(record, false, gtf, &mut overlapping_features, args) {
         counts.no_feature += 1.0;
-        store_record_assignment(assignments, record, FeatureType::NoFeature);
+        if args.nonunique != "none" && nh_multimap_status(record).unwrap_or(false) {
+            store_record_assignments(
+                assignments,
+                record,
+                vec![FeatureType::AlignmentNotUnique, FeatureType::NoFeature],
+            );
+        } else {
+            store_record_assignment(assignments, record, FeatureType::NoFeature);
+        }
         return;
     }
 
     let assignment = assign_overlaps(&overlapping_features, counts, args);
-    store_record_assignment(assignments, record, assignment);
+    if args.nonunique != "none" && nh_multimap_status(record).unwrap_or(false) {
+        store_record_assignments(
+            assignments,
+            record,
+            vec![FeatureType::AlignmentNotUnique, assignment],
+        );
+    } else {
+        store_record_assignment(assignments, record, assignment);
+    }
 }
 fn pair_side(record: &bam::Record) -> u8 {
     match (record.flag().first_in_pair(), record.flag().last_in_pair()) {
@@ -1547,14 +1582,35 @@ fn count_pair(
         );
     }
 
+    let retained_multimapper =
+        args.nonunique != "none" && pair_is_multimapped_htseq_compatible(first, second);
+
     if !all_chromosomes_known {
         counts.no_feature += 1.0;
-        store_pair_assignment(assignments, first, second, FeatureType::NoFeature);
+        if retained_multimapper {
+            store_pair_assignments(
+                assignments,
+                first,
+                second,
+                vec![FeatureType::AlignmentNotUnique, FeatureType::NoFeature],
+            );
+        } else {
+            store_pair_assignment(assignments, first, second, FeatureType::NoFeature);
+        }
         return;
     }
 
     let assignment = assign_overlaps(&overlapping_features, counts, args);
-    store_pair_assignment(assignments, first, second, assignment);
+    if retained_multimapper {
+        store_pair_assignments(
+            assignments,
+            first,
+            second,
+            vec![FeatureType::AlignmentNotUnique, assignment],
+        );
+    } else {
+        store_pair_assignment(assignments, first, second, assignment);
+    }
 }
 fn records_are_mates_name_sorted(first: &bam::Record, second: &bam::Record) -> bool {
     if pair_side(first) == pair_side(second) {
