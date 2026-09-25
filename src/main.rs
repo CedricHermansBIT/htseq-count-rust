@@ -416,7 +416,7 @@ struct RecordIdentity {
     mate_start: i32,
     template_len: i32,
     mapq: u8,
-    cigar: String,
+    cigar: Vec<u32>,
 }
 
 type AssignmentStore = Arc<Mutex<HashMap<RecordIdentity, VecDeque<FeatureType>>>>;
@@ -444,7 +444,7 @@ fn record_identity(record: &bam::Record) -> RecordIdentity {
         mate_start: record.mate_start(),
         template_len: record.template_len(),
         mapq: record.mapq(),
-        cigar: format!("{:?}", record.cigar()),
+        cigar: record.cigar().raw().to_vec(),
     }
 }
 
