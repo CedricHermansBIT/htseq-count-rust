@@ -1742,7 +1742,7 @@ fn count_paired_position_sorted(
                     counts,
                     args,
                     gtf,
-                    sender,
+                    assignments,
                 );
             } else {
                 count_pair(
@@ -1752,7 +1752,7 @@ fn count_paired_position_sorted(
                     counts,
                     args,
                     gtf,
-                    sender,
+                    assignments,
                 );
             }
         } else {
@@ -1783,7 +1783,7 @@ fn count_paired_position_sorted(
                     counts,
                     args,
                     gtf,
-                    sender,
+                    assignments,
                 );
             } else {
                 count_pair(
@@ -1793,7 +1793,7 @@ fn count_paired_position_sorted(
                     counts,
                     args,
                     gtf,
-                    sender,
+                    assignments,
                 );
             }
         }
