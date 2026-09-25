@@ -55,7 +55,9 @@ pub fn prepare_alignment(
     }
 
     let header = Header::from_template(reader.header());
-    let temp = NamedTempFile::new()
+    let temp = tempfile::Builder::new()
+        .suffix(".bam")
+        .tempfile()
         .map_err(|e| format!("Could not create temporary BAM for input conversion: {e}"))?;
     let temp_path = temp.into_temp_path();
 
