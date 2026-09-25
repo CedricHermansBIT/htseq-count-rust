@@ -1,0 +1,58 @@
+name: Real-data benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      repeats:
+        description: "Measured repeats per tool"
+        required: false
+        default: "3"
+      both_datasets:
+        description: "Benchmark both Pasilla chr4 BAMs"
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install HTSeq
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install HTSeq
+
+      - name: Build Rust release
+        run: cargo build --release --locked
+
+      - name: Benchmark one real dataset
+        if: ${{ !inputs.both_datasets }}
+        run: |
+          python benchmarks/benchmark_real_data.py \
+            --rust-bin target/release/htseq_count_rust \
+            --repeats "${{ inputs.repeats }}"
+
+      - name: Benchmark both real datasets
+        if: ${{ inputs.both_datasets }}
+        run: |
+          python benchmarks/benchmark_real_data.py \
+            --rust-bin target/release/htseq_count_rust \
+            --dataset GSM461177 \
+            --dataset GSM461178 \
+            --repeats "${{ inputs.repeats }}"
+
+      - name: Upload benchmark report
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-data-benchmark
+          path: |
+            benchmarks/results/real_data_benchmark.json
+            benchmarks/results/real_data_benchmark.md
+            benchmarks/results/runs/*.time.tsv
+            benchmarks/results/runs/*.stderr.txt
