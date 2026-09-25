@@ -9,7 +9,7 @@ use std::cmp::{max, min};
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read as IoRead, Write};
-use std::sync::{mpsc, Arc};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Instant;
 use clap::Parser;
@@ -138,33 +138,8 @@ fn count_one_alignment(
         .map(|(i, name)| (name.clone(), i as i32))
         .collect();
 
-    let reader_threads = args.threads;
-    let (assignment_sender, writer_thread) =
-        if let Some(output_sam) = args.current_output_sam.clone() {
-            let input_reads = effective_bam.clone();
-            let output_header = reads_reader.header().clone();
-            let (sender, receiver) = mpsc::channel::<FeatureType>();
-            let writer_thread = thread::spawn(move || {
-                let mut output_sam = SamWriter::from_path(output_sam, output_header)
-                    .expect("Could not create output SAM file");
-                let mut bam =
-                    ReadsReader::from_path(input_reads, reader_threads, "bam");
-                let mut record = bam::Record::new();
-                for assignment in receiver {
-                    match bam.read_into(&mut record) {
-                        Ok(true) => (),
-                        Ok(false) => break,
-                        Err(e) => panic!("{}", e),
-                    };
-                    let feature = assignment.as_bytes();
-                    record.tags_mut().push_string(b"XF", &feature);
-                    output_sam.write(&record).unwrap();
-                }
-            });
-            (Some(sender), Some(writer_thread))
-        } else {
-            (None, None)
-        };
+    let assignment_store: Option<AssignmentStore> =
+        args.current_output_sam.as_ref().map(|_| Arc::new(Mutex::new(HashMap::new())));
 
     let annotation_started = Instant::now();
     let (gtf, feature_names, feature_metadata) =
@@ -206,7 +181,7 @@ fn count_one_alignment(
         &mut counts,
         &args,
         gtf,
-        assignment_sender.as_ref(),
+        assignment_store.as_ref(),
     );
     if std::env::var_os("HTSEQ_COUNT_RUST_TIMINGS").is_some() {
         eprintln!(
@@ -215,12 +190,16 @@ fn count_one_alignment(
         );
     }
 
-    drop(assignment_sender);
-    if let Some(writer_thread) = writer_thread {
-        if !args.quiet {
-            eprintln!("Waiting for SAM writer thread to finish...");
-        }
-        writer_thread.join().unwrap();
+    if let (Some(output_path), Some(assignments)) =
+        (args.current_output_sam.as_deref(), assignment_store.as_ref())
+    {
+        write_annotated_samout(
+            &effective_bam,
+            output_path,
+            &args.samout_format,
+            args.threads,
+            assignments,
+        );
     }
 
     RunResult {
@@ -396,6 +375,7 @@ impl Iterator for ReadsReader {
 
 
 
+#[derive(Debug, Clone)]
 enum FeatureType {
     Name(String),
     NoFeature,
@@ -417,6 +397,136 @@ impl FeatureType {
             FeatureType::AlignmentNotUnique => b"__alignment_not_unique".to_vec(),
             FeatureType::None => b"".to_vec(),
         }
+    }
+}
+
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+struct RecordIdentity {
+    name: Vec<u8>,
+    paired: bool,
+    side: u8,
+    mapped: bool,
+    reverse: bool,
+    secondary: bool,
+    supplementary: bool,
+    ref_id: i32,
+    start: i32,
+    mate_ref_id: i32,
+    mate_start: i32,
+    template_len: i32,
+    mapq: u8,
+    cigar: String,
+}
+
+type AssignmentStore = Arc<Mutex<HashMap<RecordIdentity, VecDeque<FeatureType>>>>;
+
+fn record_identity(record: &bam::Record) -> RecordIdentity {
+    RecordIdentity {
+        name: record.name().to_vec(),
+        paired: record.flag().is_paired(),
+        side: if record.flag().is_paired() {
+            match (record.flag().first_in_pair(), record.flag().last_in_pair()) {
+                (true, false) => 1,
+                (false, true) => 2,
+                _ => 0,
+            }
+        } else {
+            0
+        },
+        mapped: record.flag().is_mapped(),
+        reverse: record.flag().is_reverse_strand(),
+        secondary: record.flag().is_secondary(),
+        supplementary: record.flag().is_supplementary(),
+        ref_id: record.ref_id(),
+        start: record.start(),
+        mate_ref_id: record.mate_ref_id(),
+        mate_start: record.mate_start(),
+        template_len: record.template_len(),
+        mapq: record.mapq(),
+        cigar: format!("{:?}", record.cigar()),
+    }
+}
+
+fn store_record_assignment(
+    store: Option<&AssignmentStore>,
+    record: &bam::Record,
+    assignment: FeatureType,
+) {
+    if let Some(store) = store {
+        store
+            .lock()
+            .unwrap()
+            .entry(record_identity(record))
+            .or_default()
+            .push_back(assignment);
+    }
+}
+
+fn store_pair_assignment(
+    store: Option<&AssignmentStore>,
+    first: Option<&bam::Record>,
+    second: Option<&bam::Record>,
+    assignment: FeatureType,
+) {
+    if let Some(record) = first {
+        store_record_assignment(store, record, assignment.clone());
+    }
+    if let Some(record) = second {
+        store_record_assignment(store, record, assignment);
+    }
+}
+
+fn write_annotated_samout(
+    input_path: &str,
+    output_path: &str,
+    format: &str,
+    threads: u16,
+    assignments: &AssignmentStore,
+) {
+    let output_is_bam = format.eq_ignore_ascii_case("bam");
+    let temporary = if output_is_bam {
+        Some(tempfile::NamedTempFile::new().expect("Could not create temporary SAM output"))
+    } else {
+        None
+    };
+    let sam_path = temporary
+        .as_ref()
+        .map(|temp| temp.path().to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from(output_path));
+
+    let mut reader = ReadsReader::from_path(input_path.to_string(), threads, "bam");
+    let header = reader.header().clone();
+    let mut writer = SamWriter::from_path(sam_path.to_string_lossy().to_string(), header)
+        .expect("Could not create annotated SAM output");
+    let mut record = bam::Record::new();
+
+    loop {
+        match reader.read_into(&mut record) {
+            Ok(true) => {}
+            Ok(false) => break,
+            Err(e) => panic!("{}", e),
+        }
+
+        let assignment = assignments
+            .lock()
+            .unwrap()
+            .get_mut(&record_identity(&record))
+            .and_then(VecDeque::pop_front)
+            .unwrap_or(FeatureType::None);
+        record.tags_mut().push_string(b"XF", &assignment.as_bytes());
+        writer.write(&record).unwrap();
+    }
+    drop(writer);
+
+    if output_is_bam {
+        input::convert_alignment_output(
+            &sam_path,
+            std::path::Path::new(output_path),
+            "bam",
+            threads,
+        )
+        .unwrap_or_else(|e| panic!("{}", e));
     }
 }
 
