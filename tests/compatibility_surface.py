@@ -548,7 +548,7 @@ def test_formats(repo, rust, htseq, root, gtf, sam1, sam2):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--rust-bin", default="target/release/htseq_count_rust")
+    ap.add_argument("--rust-bin", default="target/release/tallyseq")
     ap.add_argument("--htseq-bin", default="htseq-count")
     ap.add_argument("--skip-formats", action="store_true")
     args = ap.parse_args()
