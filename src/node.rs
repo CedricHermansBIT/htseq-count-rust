@@ -362,7 +362,7 @@ impl Node {
 
     }
 
-    pub fn write_structure(&self, f: &mut File, indent: usize, chr:String) -> std::fmt::Result {
+    pub fn write_structure(&self, f: &mut File, indent: usize, chr: &str) -> std::fmt::Result {
         // write as dot file connected by edges
         // if indent is 0, write the header
         if indent==0 {
@@ -375,7 +375,7 @@ impl Node {
         if let Some(left_node) = &self.left_node {
             _ = writeln!(f, "{} -> {}", self.x_center, left_node.x_center);
             // Recursively write the left node
-            left_node.write_structure(f, indent+1, chr.clone())?;
+            left_node.write_structure(f, indent+1, chr)?;
         }
         if let Some(right_node) = &self.right_node {
             _ = write!(f, "{} -> {}", self.x_center, right_node.x_center);
