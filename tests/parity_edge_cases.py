@@ -91,3 +91,88 @@ EDGE_CASES = [
         opts(stranded="yes"),
     ),
 ]
+
+
+if __name__ == "__main__":
+    import argparse
+    import math
+    import shutil
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    def run(cmd, cwd):
+        return subprocess.run(
+            cmd, cwd=cwd, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
+
+    def parse_counts(text):
+        out = {}
+        for line in text.splitlines():
+            fields = line.rstrip("\n").split("\t")
+            if len(fields) < 2:
+                continue
+            try:
+                out[fields[0]] = float(fields[-1])
+            except ValueError:
+                pass
+        return out
+
+    def delta(a, b):
+        keys = sorted(set(a) | set(b))
+        return [
+            (key, a.get(key), b.get(key))
+            for key in keys
+            if a.get(key) is None
+            or b.get(key) is None
+            or not math.isclose(a[key], b[key], rel_tol=1e-9, abs_tol=1e-9)
+        ]
+
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--rust-bin", default="target/release/htseq_count_rust")
+    ap.add_argument("--htseq-bin", default="htseq-count")
+    args = ap.parse_args()
+
+    root = Path.cwd()
+    rust = str((root / args.rust_bin).resolve())
+    htseq = shutil.which(args.htseq_bin) or args.htseq_bin
+    failures = 0
+
+    with tempfile.TemporaryDirectory(prefix="htseq-rust-edge-") as td:
+        td = Path(td)
+        for name, gtfs, sams, op in EDGE_CASES:
+            case = td / name
+            case.mkdir()
+            gtf = case / "features.gtf"
+            sam_path = case / "reads.sam"
+            gtf.write_text("\n".join(gtfs) + "\n")
+            sam_path.write_text(
+                "@HD\tVN:1.6\tSO:queryname\n"
+                "@SQ\tSN:chr1\tLN:1000\n"
+                + "\n".join(sams) + "\n"
+            )
+
+            rr = run([rust] + op + [str(sam_path), str(gtf)], root)
+            hr = run([htseq] + op + [str(sam_path), str(gtf)], root)
+
+            if rr.returncode or hr.returncode:
+                failures += 1
+                print(f"[DIFF] {name}: exit rust={rr.returncode}, htseq={hr.returncode}")
+                if rr.stderr.strip():
+                    print("  rust:", rr.stderr.strip().replace("\n", " | "))
+                if hr.stderr.strip():
+                    print("  htseq:", hr.stderr.strip().replace("\n", " | "))
+                continue
+
+            d = delta(parse_counts(rr.stdout), parse_counts(hr.stdout))
+            if d:
+                failures += 1
+                print(f"[DIFF] {name}")
+                for row in d:
+                    print(" ", row)
+            else:
+                print(f"[ OK ] {name}")
+
+    print(f"Edge-case differences: {failures}/{len(EDGE_CASES)}")
+    raise SystemExit(1 if failures else 0)
