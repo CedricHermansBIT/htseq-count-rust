@@ -815,10 +815,11 @@ fn parse_i32_ascii(value: &[u8]) -> i32 {
 fn find_attribute_bytes<'a>(raw: &'a [u8], wanted: &[u8]) -> Option<&'a [u8]> {
     let mut start = 0usize;
     let mut in_quotes = false;
+    let mut found = None;
 
     for index in 0..=raw.len() {
         let at_end = index == raw.len();
-        if !at_end {
+        if (!at_end) {
             match raw[index] {
                 b'"' => in_quotes = !in_quotes,
                 b';' if !in_quotes => {}
@@ -851,13 +852,16 @@ fn find_attribute_bytes<'a>(raw: &'a [u8], wanted: &[u8]) -> Option<&'a [u8]> {
         if value.len() >= 2 && value[0] == b'"' && value[value.len() - 1] == b'"' {
             value = &value[1..value.len() - 1];
         }
-        return Some(value);
+
+        // HTSeq builds a Python dict from parsed attribute tuples. Repeated
+        // keys therefore resolve to the last value on the feature line.
+        found = Some(value);
     }
 
     if in_quotes {
         panic!("GTF/GFF attribute string contains mismatched quotes");
     }
-    None
+    found
 }
 
 fn parse_feature_id_bytes<'a>(
