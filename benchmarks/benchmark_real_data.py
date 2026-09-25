@@ -307,7 +307,7 @@ def get_rust_binary(repo: Path, requested: str | None, build: bool) -> Path:
     candidate = (
         Path(requested).expanduser()
         if requested
-        else Path("target/release/htseq_count_rust")
+        else Path("target/release/tallyseq")
     )
     if not candidate.is_absolute():
         candidate = repo / candidate
