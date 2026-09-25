@@ -16,6 +16,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-packaging-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   unix:
     name: Package ${{ matrix.label }}
@@ -33,7 +37,7 @@ jobs:
             label: macos-arm64
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Build release
         run: cargo build --release --locked
@@ -48,6 +52,7 @@ jobs:
           mkdir -p dist
           cp target/release/tallyseq dist/tallyseq
           cp target/release/tallyseq dist/htseq-count
+          ./dist/htseq-count --version
           archive="TallySeq-${{ matrix.label }}.tar.gz"
           tar -C dist -czf "$archive" tallyseq htseq-count
           echo "ARCHIVE=$archive" >> "$GITHUB_ENV"
@@ -69,7 +74,7 @@ jobs:
     name: Package windows-x86_64
     runs-on: windows-2025
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Build release
         shell: pwsh
@@ -87,6 +92,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Copy-Item target\release\tallyseq.exe dist\tallyseq.exe
           Copy-Item target\release\tallyseq.exe dist\htseq-count.exe
+          .\dist\htseq-count.exe --version
           $archive = "TallySeq-windows-x86_64.zip"
           Compress-Archive -Path dist\tallyseq.exe,dist\htseq-count.exe -DestinationPath $archive -Force
           "ARCHIVE=$archive" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
