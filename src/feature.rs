@@ -1,12 +1,14 @@
 #![allow(dead_code)]
 
+use std::sync::Arc;
+
 // Struct to store the features
 #[derive(Debug, Eq, PartialEq, Hash, Clone, Default)]
 pub struct Feature {
     // Integer ID is interned once during annotation loading. It is used in
     // per-read ambiguity logic so the hot path does not compare gene strings.
     id: usize,
-    name: String,
+    name: Arc<str>,
     chr: i32,
     start: i32,
     end: i32,
@@ -14,7 +16,7 @@ pub struct Feature {
 }
 
 impl Feature {
-    pub fn new(id: usize, name: String, chr: i32, start: i32, end: i32, strand: char) -> Self {
+    pub fn new(id: usize, name: Arc<str>, chr: i32, start: i32, end: i32, strand: char) -> Self {
         Feature {
             id,
             name,
