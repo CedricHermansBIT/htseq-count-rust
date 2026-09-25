@@ -221,6 +221,67 @@ CASES = [
      ],
      opts(order="pos")),
 
+    ("paired_end_position_sorted_missing_mate",
+     [exon(90,180,"geneA")],
+     [paired_sam("pairA", 99, 100, 300)],
+     opts(order="pos")),
+
+    ("paired_end_spliced_cigar",
+     [exon(100,104,"geneA"), exon(115,119,"geneA"), exon(200,209,"geneA")],
+     [
+         paired_sam("pair1", 99, 100, 200, cigar="5M10N5M"),
+         paired_sam("pair1", 147, 200, 100),
+     ],
+     opts(order="name")),
+
+    ("paired_end_low_mapq",
+     [exon(100,300,"geneA")],
+     [
+         paired_sam("pair1", 99, 120, 220, mapq=5),
+         paired_sam("pair1", 147, 220, 120),
+     ],
+     opts(order="name")),
+
+    ("paired_end_secondary_ignore",
+     [exon(100,300,"geneA")],
+     [
+         paired_sam("pair1", 99, 120, 220),
+         paired_sam("pair1", 147, 220, 120),
+         paired_sam("pair1", 355, 120, 220),
+         paired_sam("pair1", 403, 220, 120),
+     ],
+     opts(secondary="ignore", supplementary="ignore", order="name")),
+
+    ("paired_end_secondary_score",
+     [exon(100,300,"geneA")],
+     [
+         paired_sam("pair1", 99, 120, 220),
+         paired_sam("pair1", 147, 220, 120),
+         paired_sam("pair1", 355, 120, 220),
+         paired_sam("pair1", 403, 220, 120),
+     ],
+     opts(secondary="score", supplementary="ignore", order="name")),
+
+    ("paired_end_supplementary_score",
+     [exon(100,300,"geneA")],
+     [
+         paired_sam("pair1", 99, 120, 220),
+         paired_sam("pair1", 147, 220, 120),
+         paired_sam("pair1", 2147, 120, 220),
+         paired_sam("pair1", 2195, 220, 120),
+     ],
+     opts(secondary="ignore", supplementary="score", order="name")),
+
+    ("paired_end_intersection_nonempty",
+     [exon(100,250,"geneA"), exon(210,230,"geneB")],
+     [paired_sam("pair1", 99, 120, 220), paired_sam("pair1", 147, 220, 120)],
+     opts(mode="intersection-nonempty", order="name")),
+
+    ("paired_end_intersection_strict",
+     [exon(100,250,"geneA"), exon(215,225,"geneB")],
+     [paired_sam("pair1", 99, 120, 220), paired_sam("pair1", 147, 220, 120)],
+     opts(mode="intersection-strict", order="name")),
+
     ("default_idattr",
      [exon(100,109,"ENSG_TEST", gene_name="GENE_TEST")],
      [sam("r1")],
