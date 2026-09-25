@@ -1,6 +1,12 @@
 name: Real-data benchmark
 
 on:
+  push:
+    branches:
+      - diagnostics
+    paths:
+      - "benchmarks/benchmark_real_data.py"
+      - ".github/workflows/benchmark.yml"
   workflow_dispatch:
     inputs:
       repeats:
@@ -32,14 +38,15 @@ jobs:
         run: cargo build --release --locked
 
       - name: Benchmark one real dataset
-        if: ${{ !inputs.both_datasets }}
+        if: ${{ github.event_name == 'push' || !inputs.both_datasets }}
         run: |
+          REPEATS="${{ github.event_name == 'push' && '1' || inputs.repeats }}"
           python benchmarks/benchmark_real_data.py \
             --rust-bin target/release/htseq_count_rust \
-            --repeats "${{ inputs.repeats }}"
+            --repeats "$REPEATS"
 
       - name: Benchmark both real datasets
-        if: ${{ inputs.both_datasets }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.both_datasets }}
         run: |
           python benchmarks/benchmark_real_data.py \
             --rust-bin target/release/htseq_count_rust \
