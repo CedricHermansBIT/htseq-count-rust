@@ -497,7 +497,7 @@ fn write_annotated_samout(
         .map(|temp| temp.path().to_path_buf())
         .unwrap_or_else(|| std::path::PathBuf::from(output_path));
 
-    let mut reader = ReadsReader::from_path(input_path.to_string(), threads, "bam");
+    let mut reader = ReadsReader::from_path(input_path.to_string(), threads, "auto");
     let header = reader.header().clone();
     let mut writer = SamWriter::from_path(sam_path.to_string_lossy().to_string(), header)
         .expect("Could not create annotated SAM output");
