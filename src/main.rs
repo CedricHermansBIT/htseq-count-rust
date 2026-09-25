@@ -110,7 +110,7 @@ fn main() {
     // bam fields: https://docs.rs/bam/0.3.0/bam/record/struct.Record.html
 
     // Read the gtf file
-    let gtf = read_gtf(&args.gtf, args.t.as_str(), &ref_names_to_id, &args);
+    let gtf = read_gtf(&args.gtf, &args.t, &ref_names_to_id, &args);
 
     // let read= 21940455;
     // eprintln!("Searching for reads overlapping position {}-{}...", read, read+25);
@@ -280,9 +280,10 @@ struct Args {
         short = "t",
         long = "type",
         default_value = "exon",
-        help = "Feature type (3rd column in GTF file) to be used, all features of other type are ignored (default, suitable for Ensembl GTF files: exon)"
+        number_of_values = 1,
+        help = "Feature type (3rd column in GTF file) to be used. May be specified multiple times (default: exon)."
     )]
-    t: String,
+    t: Vec<String>,
 
     // Feature ID
     // TODO: implement actual logic for this option
@@ -402,7 +403,7 @@ fn parse_feature_attributes(raw: &str) -> HashMap<String, String> {
     result
 }
 
-fn read_gtf(file_path: &str, feature_type_filter: &str, ref_names_to_id: &HashMap<String, i32>, args: &Args) -> Vec<Option<IntervalTree>> {
+fn read_gtf(file_path: &str, feature_type_filter: &[String], ref_names_to_id: &HashMap<String, i32>, args: &Args) -> Vec<Option<IntervalTree>> {
     let mut map: HashMap<i32, Vec<Interval>> = HashMap::new();
     let file = File::open(file_path).expect("Could not open this file");
     let mut reader = BufReader::new(file);
@@ -432,7 +433,7 @@ fn read_gtf(file_path: &str, feature_type_filter: &str, ref_names_to_id: &HashMa
             );
         }
 
-        if fields[2] != feature_type_filter {
+        if !feature_type_filter.iter().any(|feature_type| feature_type == fields[2]) {
             line.clear();
             continue;
         }
