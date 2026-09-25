@@ -925,17 +925,21 @@ fn parse_feature_query(query: Option<&str>) -> Option<(String, String)> {
     Some((attribute.to_string(), value[1..value.len() - 1].to_string()))
 }
 
-fn read_gtf(
+fn load_annotation(
     file_path: &str,
     feature_type_filter: &[String],
-    ref_names_to_id: &HashMap<String, i32>,
     args: &Args,
-) -> (Vec<Option<IntervalTree>>, Vec<Arc<str>>, FeatureMetadata) {
+) -> SharedAnnotation {
     let profile_timings = std::env::var_os("HTSEQ_COUNT_RUST_TIMINGS").is_some();
     let parse_started = Instant::now();
-    let mut map: HashMap<i32, Vec<Interval>> = HashMap::new();
+
+    // Chromosome names, rather than BAM reference IDs, are the stable key.
+    // This lets one annotation index be shared by BAMs whose @SQ records differ
+    // in order or contain different subsets of chromosomes.
+    let mut intervals_by_chrom: HashMap<String, (i32, Vec<Interval>)> = HashMap::new();
+    let mut next_chr_id = 0i32;
+
     let file = File::open(file_path).expect("Could not open this file");
-    // HTSeq accepts gzip-compressed GTF/GFF transparently.
     let stream: Box<dyn IoRead> = if file_path.to_ascii_lowercase().ends_with(".gz")
         || file_path.to_ascii_lowercase().ends_with(".gzip")
     {
@@ -943,14 +947,11 @@ fn read_gtf(
     } else {
         Box::new(file)
     };
-    // GTF/GFF files are large sequential text streams. A larger buffer reduces
-    // read syscalls, while reusing a preallocated line avoids early growth.
+
     let mut reader = BufReader::with_capacity(1024 * 1024, stream);
-    let mut counter = 0;
+    let mut counter = 0usize;
     let mut line: Vec<u8> = Vec::with_capacity(512);
 
-    let mut chromosome_ids = ref_names_to_id.clone();
-    let mut next_chr_id = chromosome_ids.len() as i32;
     let mut feature_ids: HashMap<String, usize> = HashMap::new();
     let mut feature_names: Vec<Arc<str>> = Vec::new();
     let mut metadata_column_names = args.additional_attributes.clone();
@@ -1011,14 +1012,14 @@ fn read_gtf(
 
         let chr_name = std::str::from_utf8(chr_field.unwrap())
             .expect("GTF/GFF chromosome name is not valid UTF-8");
-        let chr_id = match chromosome_ids.get(chr_name) {
-            Some(id) => *id,
-            None => {
-                let id = next_chr_id;
-                chromosome_ids.insert(chr_name.to_string(), id);
-                next_chr_id += 1;
-                id
-            }
+
+        let chr_id = if let Some((id, _)) = intervals_by_chrom.get(chr_name) {
+            *id
+        } else {
+            let id = next_chr_id;
+            next_chr_id += 1;
+            intervals_by_chrom.insert(chr_name.to_string(), (id, Vec::new()));
+            id
         };
 
         let start = parse_i32_ascii(start_field.unwrap());
@@ -1063,6 +1064,8 @@ fn read_gtf(
         let (feature_id, feature_name) =
             if let Some(id) = feature_ids.get(parsed_name.as_ref()) {
                 if !row_metadata.is_empty() {
+                    // HTSeq overwrites metadata for repeated feature IDs with
+                    // the last matching annotation record.
                     metadata_values[*id] = row_metadata;
                 }
                 (*id, feature_names[*id].clone())
@@ -1084,9 +1087,15 @@ fn read_gtf(
             max(start, end),
             strand,
         );
-        map.entry(chr_id)
-            .or_default()
-            .push(Interval::new(min(start, end), max(start, end), Some(feature)));
+        intervals_by_chrom
+            .get_mut(chr_name)
+            .unwrap()
+            .1
+            .push(Interval::new(
+                min(start, end),
+                max(start, end),
+                Some(feature),
+            ));
         line.clear();
     }
 
@@ -1105,14 +1114,14 @@ fn read_gtf(
     }
     let index_started = Instant::now();
 
-    let mut result: Vec<Option<IntervalTree>> = Vec::with_capacity(chromosome_ids.len());
-    for _ in 0..chromosome_ids.len() {
-        result.push(None);
+    let mut trees_by_chrom: HashMap<String, Arc<IntervalTree>> = HashMap::new();
+    for (chromosome, (_, intervals)) in intervals_by_chrom {
+        trees_by_chrom.insert(
+            chromosome,
+            Arc::new(IntervalTree::new(Some(intervals))),
+        );
     }
 
-    for (chr, intervals) in map {
-        result[chr as usize] = Some(IntervalTree::new(Some(intervals)));
-    }
     if !args.quiet {
         eprintln!("done.");
     }
@@ -1122,14 +1131,15 @@ fn read_gtf(
             index_started.elapsed().as_secs_f64()
         );
     }
-    (
-        result,
-        feature_names,
-        FeatureMetadata {
+
+    SharedAnnotation {
+        trees_by_chrom,
+        feature_names: Arc::new(feature_names),
+        metadata: Arc::new(FeatureMetadata {
             column_names: metadata_column_names,
             values: metadata_values,
-        },
-    )
+        }),
+    }
 }
 
 fn should_skip_record(
@@ -1255,7 +1265,7 @@ fn write_counts(counts: Counts, args: Args, counter: i32) {
 fn add_record_blocks<'a>(
     record: &bam::Record,
     invert_pair_strand: bool,
-    gtf: &'a [Option<IntervalTree>],
+    gtf: &'a [Option<Arc<IntervalTree>>],
     overlapping_features: &mut Vec<Vec<&'a Feature>>,
     args: &Args,
 ) -> bool {
@@ -1379,7 +1389,7 @@ fn count_single_record(
     counter: &mut i32,
     counts: &mut Counts,
     args: &Args,
-    gtf: &[Option<IntervalTree>],
+    gtf: &[Option<Arc<IntervalTree>>],
     assignments: Option<&AssignmentStore>,
 ) {
     *counter += 1;
@@ -1500,7 +1510,7 @@ fn count_pair(
     counter: &mut i32,
     counts: &mut Counts,
     args: &Args,
-    gtf: &[Option<IntervalTree>],
+    gtf: &[Option<Arc<IntervalTree>>],
     assignments: Option<&AssignmentStore>,
 ) {
     *counter += 1;
@@ -1573,7 +1583,7 @@ fn process_name_group(
     counter: &mut i32,
     counts: &mut Counts,
     args: &Args,
-    gtf: &[Option<IntervalTree>],
+    gtf: &[Option<Arc<IntervalTree>>],
     assignments: Option<&AssignmentStore>,
 ) {
     while let Some(record) = group.pop_front() {
@@ -1612,7 +1622,7 @@ fn count_paired_name_sorted(
     counter: &mut i32,
     counts: &mut Counts,
     args: &Args,
-    gtf: &[Option<IntervalTree>],
+    gtf: &[Option<Arc<IntervalTree>>],
     assignments: Option<&AssignmentStore>,
 ) {
     let mut current_name: Option<Vec<u8>> = None;
@@ -1691,7 +1701,7 @@ fn count_paired_position_sorted(
     counter: &mut i32,
     counts: &mut Counts,
     args: &Args,
-    gtf: &[Option<IntervalTree>],
+    gtf: &[Option<Arc<IntervalTree>>],
     assignments: Option<&AssignmentStore>,
 ) {
     let mut buffer: HashMap<MateKey, VecDeque<bam::Record>> = HashMap::new();
@@ -1792,7 +1802,7 @@ fn count_reads(
     counter: &mut i32,
     counts: &mut Counts,
     args: &Args,
-    gtf: Vec<Option<IntervalTree>>,
+    gtf: Vec<Option<Arc<IntervalTree>>>,
     assignments: Option<&AssignmentStore>,
 ) {
     // RecordReader::read_into reuses the record's internal buffers. The bam
