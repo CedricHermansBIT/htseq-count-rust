@@ -115,42 +115,71 @@ fn sidecar_prefix(path: &str) -> String {
 fn write_mtx(path: &str, table: &OutputTable, sparse: bool) -> Result<(), String> {
     let mut out = BufWriter::new(File::create(path).map_err(|e| e.to_string())?);
     if sparse {
-        let nnz = table.values.iter().filter(|value| **value != 0.0).count();
-        writeln!(out, "%%MatrixMarket matrix coordinate real general")
-            .map_err(|e| e.to_string())?;
-        writeln!(out, "{} {} {}", table.n_samples(), table.n_features(), nnz)
-            .map_err(|e| e.to_string())?;
-        for sample in 0..table.n_samples() {
-            for feature in 0..table.n_features() {
-                let value = table.value(sample, feature) as f32;
-                if value != 0.0 {
-                    writeln!(out, "{} {} {}", sample + 1, feature + 1, value)
-                        .map_err(|e| e.to_string())?;
-                }
-            }
-        }
+        write_sparse_mtx(&mut out, table)?;
     } else {
-        writeln!(out, "%%MatrixMarket matrix array real general")
-            .map_err(|e| e.to_string())?;
-        writeln!(out, "{} {}", table.n_samples(), table.n_features())
-            .map_err(|e| e.to_string())?;
-        // Matrix Market array format is column-major.
+        write_dense_mtx(&mut out, table)?;
+    }
+    write_mtx_sidecars(path, table)
+}
+
+fn write_sparse_mtx<W: Write>(out: &mut W, table: &OutputTable) -> Result<(), String> {
+    let nnz = table.values.iter().filter(|value| **value != 0.0).count();
+    writeln!(out, "%%MatrixMarket matrix coordinate real general")
+        .map_err(|e| e.to_string())?;
+    writeln!(
+        out,
+        "{} {} {}",
+        table.n_samples(),
+        table.n_features(),
+        nnz
+    )
+    .map_err(|e| e.to_string())?;
+
+    for sample in 0..table.n_samples() {
         for feature in 0..table.n_features() {
-            for sample in 0..table.n_samples() {
-                writeln!(out, "{}", table.value(sample, feature) as f32)
+            let value = table.value(sample, feature) as f32;
+            if value != 0.0 {
+                writeln!(out, "{} {} {}", sample + 1, feature + 1, value)
                     .map_err(|e| e.to_string())?;
             }
         }
     }
+    Ok(())
+}
 
+fn write_dense_mtx<W: Write>(out: &mut W, table: &OutputTable) -> Result<(), String> {
+    writeln!(out, "%%MatrixMarket matrix array real general")
+        .map_err(|e| e.to_string())?;
+    writeln!(out, "{} {}", table.n_samples(), table.n_features())
+        .map_err(|e| e.to_string())?;
+
+    // Matrix Market array format is column-major.
+    for feature in 0..table.n_features() {
+        for sample in 0..table.n_samples() {
+            writeln!(out, "{}", table.value(sample, feature) as f32)
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+fn write_mtx_sidecars(path: &str, table: &OutputTable) -> Result<(), String> {
     let prefix = sidecar_prefix(path);
+    write_mtx_samples(&prefix, table)?;
+    write_mtx_features(&prefix, table)
+}
+
+fn write_mtx_samples(prefix: &str, table: &OutputTable) -> Result<(), String> {
     let mut samples = BufWriter::new(
         File::create(format!("{prefix}_samples.tsv")).map_err(|e| e.to_string())?,
     );
     for sample in &table.sample_names {
         writeln!(samples, "{}", sample).map_err(|e| e.to_string())?;
     }
+    Ok(())
+}
 
+fn write_mtx_features(prefix: &str, table: &OutputTable) -> Result<(), String> {
     let mut features = BufWriter::new(
         File::create(format!("{prefix}_features.tsv")).map_err(|e| e.to_string())?,
     );
@@ -159,6 +188,7 @@ fn write_mtx(path: &str, table: &OutputTable, sparse: bool) -> Result<(), String
         write!(features, "\t{}", name).map_err(|e| e.to_string())?;
     }
     writeln!(features).map_err(|e| e.to_string())?;
+
     for (index, id) in table.feature_ids.iter().enumerate() {
         write!(features, "{}", id).map_err(|e| e.to_string())?;
         for value in &table.metadata_values[index] {
@@ -253,121 +283,144 @@ fn write_categorical_metadata(
 
 fn write_h5ad(path: &str, table: &OutputTable, sparse: bool) -> Result<(), String> {
     let file = H5File::create(path).map_err(|e| e.to_string())?;
+    initialize_h5ad(&file)?;
+    write_h5ad_matrix(&file, table, sparse)?;
+    write_h5ad_obs(&file, table)?;
+    write_h5ad_var(&file, table)?;
+    write_h5ad_empty_groups(&file)?;
+    file.close().map_err(|e| e.to_string())
+}
+
+fn initialize_h5ad(file: &H5File) -> Result<(), String> {
     file.set_attr_string("encoding-type", "anndata")
         .map_err(|e| e.to_string())?;
     file.set_attr_string("encoding-version", "0.1.0")
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())
+}
 
+fn write_h5ad_matrix(
+    file: &H5File,
+    table: &OutputTable,
+    sparse: bool,
+) -> Result<(), String> {
     if sparse {
-        let mut data = Vec::<f32>::new();
-        let mut indices = Vec::<i32>::new();
-        let mut indptr = Vec::<i32>::with_capacity(table.n_samples() + 1);
-        indptr.push(0);
-
-        for sample in 0..table.n_samples() {
-            for feature in 0..table.n_features() {
-                let value = table.value(sample, feature);
-                if value != 0.0 {
-                    data.push(value as f32);
-                    indices.push(feature as i32);
-                }
-            }
-            indptr.push(data.len() as i32);
-        }
-
-        let x = file.create_group("X").map_err(|e| e.to_string())?;
-        x.set_attr_string("encoding-type", "csr_matrix")
-            .map_err(|e| e.to_string())?;
-        x.set_attr_string("encoding-version", "0.1.0")
-            .map_err(|e| e.to_string())?;
-        x.set_attr_array_numeric(
-            "shape",
-            &[table.n_samples() as i64, table.n_features() as i64],
-        )
-        .map_err(|e| e.to_string())?;
-
-        let data_ds = x
-            .new_dataset::<f32>()
-            .shape(&[data.len()])
-            .create("data")
-            .map_err(|e| e.to_string())?;
-        data_ds.write_raw(&data).map_err(|e| e.to_string())?;
-        set_dataset_string_attr(&data_ds, "encoding-type", "array")?;
-        set_dataset_string_attr(&data_ds, "encoding-version", "0.2.0")?;
-
-        let indices_ds = x
-            .new_dataset::<i32>()
-            .shape(&[indices.len()])
-            .create("indices")
-            .map_err(|e| e.to_string())?;
-        indices_ds
-            .write_raw(&indices)
-            .map_err(|e| e.to_string())?;
-        set_dataset_string_attr(&indices_ds, "encoding-type", "array")?;
-        set_dataset_string_attr(&indices_ds, "encoding-version", "0.2.0")?;
-
-        let indptr_ds = x
-            .new_dataset::<i32>()
-            .shape(&[indptr.len()])
-            .create("indptr")
-            .map_err(|e| e.to_string())?;
-        indptr_ds.write_raw(&indptr).map_err(|e| e.to_string())?;
-        set_dataset_string_attr(&indptr_ds, "encoding-type", "array")?;
-        set_dataset_string_attr(&indptr_ds, "encoding-version", "0.2.0")?;
+        write_h5ad_sparse_matrix(file, table)
     } else {
-        let matrix_f32: Vec<f32> =
-            table.values.iter().map(|value| *value as f32).collect();
-        let x = file
-            .new_dataset::<f32>()
-            .shape(&[table.n_samples(), table.n_features()])
-            .create("X")
-            .map_err(|e| e.to_string())?;
-        x.write_raw(&matrix_f32).map_err(|e| e.to_string())?;
-        set_dataset_string_attr(&x, "encoding-type", "array")?;
-        set_dataset_string_attr(&x, "encoding-version", "0.2.0")?;
+        write_h5ad_dense_matrix(file, table)
+    }
+}
+
+fn write_h5ad_sparse_matrix(file: &H5File, table: &OutputTable) -> Result<(), String> {
+    let mut data = Vec::<f32>::new();
+    let mut indices = Vec::<i32>::new();
+    let mut indptr = Vec::<i32>::with_capacity(table.n_samples() + 1);
+    indptr.push(0);
+
+    for sample in 0..table.n_samples() {
+        for feature in 0..table.n_features() {
+            let value = table.value(sample, feature);
+            if value != 0.0 {
+                data.push(value as f32);
+                indices.push(feature as i32);
+            }
+        }
+        indptr.push(data.len() as i32);
     }
 
-    let obs = file.create_group("obs").map_err(|e| e.to_string())?;
-    obs.set_attr_string("_index", "_index")
+    let x = file.create_group("X").map_err(|e| e.to_string())?;
+    x.set_attr_string("encoding-type", "csr_matrix")
         .map_err(|e| e.to_string())?;
-    obs.set_attr_string_array("column-order", &[])
+    x.set_attr_string("encoding-version", "0.1.0")
         .map_err(|e| e.to_string())?;
-    obs.set_attr_string("encoding-type", "dataframe")
-        .map_err(|e| e.to_string())?;
-    obs.set_attr_string("encoding-version", "0.2.0")
-        .map_err(|e| e.to_string())?;
-    write_string_array(&obs, "_index", &table.sample_names)?;
+    x.set_attr_array_numeric(
+        "shape",
+        &[table.n_samples() as i64, table.n_features() as i64],
+    )
+    .map_err(|e| e.to_string())?;
 
+    write_h5ad_sparse_vector(&x, "data", &data)?;
+    write_h5ad_sparse_vector(&x, "indices", &indices)?;
+    write_h5ad_sparse_vector(&x, "indptr", &indptr)
+}
+
+fn write_h5ad_sparse_vector<T>(
+    group: &rust_hdf5::H5Group,
+    name: &str,
+    values: &[T],
+) -> Result<(), String>
+where
+    T: rust_hdf5::H5Type,
+{
+    let dataset = group
+        .new_dataset::<T>()
+        .shape(&[values.len()])
+        .create(name)
+        .map_err(|e| e.to_string())?;
+    dataset.write_raw(values).map_err(|e| e.to_string())?;
+    set_dataset_string_attr(&dataset, "encoding-type", "array")?;
+    set_dataset_string_attr(&dataset, "encoding-version", "0.2.0")
+}
+
+fn write_h5ad_dense_matrix(file: &H5File, table: &OutputTable) -> Result<(), String> {
+    let matrix_f32: Vec<f32> = table.values.iter().map(|value| *value as f32).collect();
+    let x = file
+        .new_dataset::<f32>()
+        .shape(&[table.n_samples(), table.n_features()])
+        .create("X")
+        .map_err(|e| e.to_string())?;
+    x.write_raw(&matrix_f32).map_err(|e| e.to_string())?;
+    set_dataset_string_attr(&x, "encoding-type", "array")?;
+    set_dataset_string_attr(&x, "encoding-version", "0.2.0")
+}
+
+fn write_h5ad_obs(file: &H5File, table: &OutputTable) -> Result<(), String> {
+    let obs = file.create_group("obs").map_err(|e| e.to_string())?;
+    configure_dataframe_group(&obs, &[])?;
+    write_string_array(&obs, "_index", &table.sample_names)?;
+    Ok(())
+}
+
+fn write_h5ad_var(file: &H5File, table: &OutputTable) -> Result<(), String> {
     let var = file.create_group("var").map_err(|e| e.to_string())?;
-    var.set_attr_string("_index", "_index")
-        .map_err(|e| e.to_string())?;
-    let metadata_refs: Vec<&str> =
-        table.metadata_names.iter().map(String::as_str).collect();
-    var.set_attr_string_array("column-order", &metadata_refs)
-        .map_err(|e| e.to_string())?;
-    var.set_attr_string("encoding-type", "dataframe")
-        .map_err(|e| e.to_string())?;
-    var.set_attr_string("encoding-version", "0.2.0")
-        .map_err(|e| e.to_string())?;
+    let metadata_refs: Vec<&str> = table.metadata_names.iter().map(String::as_str).collect();
+    configure_dataframe_group(&var, &metadata_refs)?;
     write_string_array(&var, "_index", &table.feature_ids)?;
+
     for (column, name) in table.metadata_names.iter().enumerate() {
         let values: Vec<String> = table
             .metadata_values
             .iter()
             .map(|row| row.get(column).cloned().unwrap_or_default())
             .collect();
+
         // HTSeq builds a pandas DataFrame whose metadata columns are shorter
         // than the ID column by the five special __... rows. AnnData's default
         // writer converts these string columns to categoricals and represents
         // the missing special-row values using categorical code -1.
-        write_categorical_metadata(
-            &var,
-            name,
-            &values,
-            table.real_feature_count,
-        )?;
+        write_categorical_metadata(&var, name, &values, table.real_feature_count)?;
     }
+    Ok(())
+}
 
+fn configure_dataframe_group(
+    group: &rust_hdf5::H5Group,
+    column_order: &[&str],
+) -> Result<(), String> {
+    group
+        .set_attr_string("_index", "_index")
+        .map_err(|e| e.to_string())?;
+    group
+        .set_attr_string_array("column-order", column_order)
+        .map_err(|e| e.to_string())?;
+    group
+        .set_attr_string("encoding-type", "dataframe")
+        .map_err(|e| e.to_string())?;
+    group
+        .set_attr_string("encoding-version", "0.2.0")
+        .map_err(|e| e.to_string())
+}
+
+fn write_h5ad_empty_groups(file: &H5File) -> Result<(), String> {
     for name in ["obsm", "varm", "obsp", "varp", "layers", "uns"] {
         let group = file.create_group(name).map_err(|e| e.to_string())?;
         group
@@ -377,8 +430,7 @@ fn write_h5ad(path: &str, table: &OutputTable, sparse: bool) -> Result<(), Strin
             .set_attr_string("encoding-version", "0.1.0")
             .map_err(|e| e.to_string())?;
     }
-
-    file.close().map_err(|e| e.to_string())
+    Ok(())
 }
 
 fn write_loom(path: &str, table: &OutputTable) -> Result<(), String> {
