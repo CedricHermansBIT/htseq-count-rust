@@ -30,3 +30,12 @@ jobs:
 
       - name: Run parity diagnostics
         run: python tests/parity_against_htseq.py --rust-bin target/release/htseq_count_rust --fuzz 150
+
+      - name: Check out HTSeq reference fixtures
+        uses: actions/checkout@v4
+        with:
+          repository: htseq/htseq
+          path: htseq-reference
+
+      - name: Compare official HTSeq fixtures
+        run: python tests/parity_htseq_reference_data.py --reference-dir htseq-reference --rust-bin target/release/htseq_count_rust
