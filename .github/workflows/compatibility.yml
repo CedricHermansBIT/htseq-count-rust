@@ -31,4 +31,4 @@ jobs:
         run: cargo build --release --locked
 
       - name: Run compatibility surface
-        run: python tests/compatibility_surface.py --rust-bin target/release/htseq_count_rust
+        run: python tests/compatibility_surface.py --rust-bin target/release/tallyseq
