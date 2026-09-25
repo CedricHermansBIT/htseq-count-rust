@@ -13,6 +13,14 @@ on:
         description: "Measured repeats per tool"
         required: false
         default: "3"
+      profile:
+        description: "Benchmark profile"
+        required: false
+        type: choice
+        options:
+          - full
+          - core
+        default: full
       both_datasets:
         description: "Benchmark both Pasilla chr4 BAMs"
         required: false
@@ -41,8 +49,10 @@ jobs:
         if: ${{ github.event_name == 'push' || !inputs.both_datasets }}
         run: |
           REPEATS="${{ github.event_name == 'push' && '1' || inputs.repeats }}"
+          PROFILE="${{ github.event_name == 'push' && 'full' || inputs.profile }}"
           python benchmarks/benchmark_real_data.py \
             --rust-bin target/release/htseq_count_rust \
+            --profile "$PROFILE" \
             --repeats "$REPEATS"
 
       - name: Benchmark both real datasets
@@ -50,6 +60,7 @@ jobs:
         run: |
           python benchmarks/benchmark_real_data.py \
             --rust-bin target/release/htseq_count_rust \
+            --profile "${{ inputs.profile }}" \
             --dataset GSM461177 \
             --dataset GSM461178 \
             --repeats "${{ inputs.repeats }}"
