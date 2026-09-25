@@ -31,6 +31,9 @@ jobs:
       - name: Run parity diagnostics
         run: python tests/parity_against_htseq.py --rust-bin target/release/htseq_count_rust --fuzz 150 --paired-fuzz 100
 
+      - name: Run interval edge-case diagnostics
+        run: python tests/parity_edge_cases.py --rust-bin target/release/htseq_count_rust
+
       - name: Check out HTSeq reference fixtures
         uses: actions/checkout@v4
         with:
