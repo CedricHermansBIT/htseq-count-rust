@@ -20,13 +20,22 @@ def sam(name, pos=100, cigar="10M", flag=0, mapq=60, tags=()):
     fields = [name, str(flag), "chr1", str(pos), str(mapq), cigar, "*", "0", "0", seq, qual]
     return "\t".join(fields + list(tags))
 
-def paired_sam(name, flag, pos, mate_pos):
-    cigar = "10M"
+def paired_sam(name, flag, pos, mate_pos, cigar="10M", mapq=60, tags=(), tlen=0):
     n = qlen(cigar)
-    return "\t".join([
-        name, str(flag), "chr1", str(pos), "60", cigar, "=", str(mate_pos), "0",
-        "A" * n, "I" * n,
-    ])
+    seq = "A" * n if n else "*"
+    qual = "I" * n if n else "*"
+    fields = [
+        name, str(flag), "chr1", str(pos), str(mapq), cigar, "=",
+        str(mate_pos), str(tlen), seq, qual,
+    ]
+    return "\t".join(fields + list(tags))
+
+def paired_unmapped_sam(name, flag, mate_pos, mapq=255, tags=()):
+    fields = [
+        name, str(flag), "*", "0", str(mapq), "*", "chr1",
+        str(mate_pos), "0", "*", "*",
+    ]
+    return "\t".join(fields + list(tags))
 
 def exon(start, end, gene, strand="+", gene_name=None, extra="", chrom="chr1", feature_type="exon"):
     gene_name = gene_name or f"{gene}_name"
@@ -37,7 +46,7 @@ def exon(start, end, gene, strand="+", gene_name=None, extra="", chrom="chr1", f
 
 def opts(mode="union", nonunique="none", stranded="no", idattrs=("gene_id",),
          secondary="ignore", supplementary="ignore", minaqual=10,
-         feature_types=("exon",)):
+         feature_types=("exon",), order=None):
     out = ["-s", stranded]
     for feature_type in feature_types:
         out += ["-t", feature_type]
@@ -48,6 +57,8 @@ def opts(mode="union", nonunique="none", stranded="no", idattrs=("gene_id",),
         out += ["--secondary-alignments", secondary]
     if supplementary is not None:
         out += ["--supplementary-alignments", supplementary]
+    if order is not None:
+        out += ["-r", order]
     return out
 
 CASES = [
@@ -154,7 +165,61 @@ CASES = [
     ("paired_end_same_gene",
      [exon(100,300,"geneA")],
      [paired_sam("pair1", 99, 120, 220), paired_sam("pair1", 147, 220, 120)],
-     opts()),
+     opts(order="name")),
+
+    ("paired_end_stranded_yes",
+     [exon(100,300,"geneA", strand="+")],
+     [paired_sam("pair1", 99, 120, 220), paired_sam("pair1", 147, 220, 120)],
+     opts(stranded="yes", order="name")),
+
+    ("paired_end_stranded_reverse",
+     [exon(100,300,"geneA", strand="-")],
+     [paired_sam("pair1", 99, 120, 220), paired_sam("pair1", 147, 220, 120)],
+     opts(stranded="reverse", order="name")),
+
+    ("paired_end_ambiguous_union",
+     [exon(110,150,"geneA"), exon(210,250,"geneB")],
+     [paired_sam("pair1", 99, 120, 220), paired_sam("pair1", 147, 220, 120)],
+     opts(order="name")),
+
+    ("paired_end_missing_mate",
+     [exon(100,180,"geneA")],
+     [paired_sam("pair1", 99, 120, 220)],
+     opts(order="name")),
+
+    ("paired_end_one_unmapped",
+     [exon(100,180,"geneA")],
+     [
+         paired_sam("pair1", 73, 120, 0),
+         paired_unmapped_sam("pair1", 133, 120),
+     ],
+     opts(order="name")),
+
+    ("paired_end_nh_none",
+     [exon(100,300,"geneA")],
+     [
+         paired_sam("pair1", 99, 120, 220, tags=("NH:i:2",)),
+         paired_sam("pair1", 147, 220, 120),
+     ],
+     opts(nonunique="none", order="name")),
+
+    ("paired_end_nh_all",
+     [exon(100,300,"geneA")],
+     [
+         paired_sam("pair1", 99, 120, 220, tags=("NH:i:2",)),
+         paired_sam("pair1", 147, 220, 120),
+     ],
+     opts(nonunique="all", order="name")),
+
+    ("paired_end_position_sorted_interleaved",
+     [exon(90,330,"geneA")],
+     [
+         paired_sam("pairA", 99, 100, 300),
+         paired_sam("pairB", 99, 150, 250),
+         paired_sam("pairB", 147, 250, 150),
+         paired_sam("pairA", 147, 300, 100),
+     ],
+     opts(order="pos")),
 
     ("default_idattr",
      [exon(100,109,"ENSG_TEST", gene_name="GENE_TEST")],
@@ -283,7 +348,6 @@ def main():
         cases = [case for case in cases if case[0] in wanted]
 
     different = 0
-    known_differences = {"paired_end_same_gene"}
     with tempfile.TemporaryDirectory(prefix="htseq-rust-parity-") as td:
         root_tmp = Path(td)
         for name, gtfs, sams, op in cases:
@@ -316,11 +380,7 @@ def main():
                 continue
 
             d = delta(parse_counts(rr.stdout), parse_counts(hr.stdout))
-            if d and name in known_differences:
-                print(f"[KNOWN] {name} (paired-end is not implemented yet)")
-                for row in d:
-                    print(" ", row)
-            elif d:
+            if d:
                 different += 1
                 print(f"[DIFF] {name}")
                 if name.startswith("fuzz_"):
