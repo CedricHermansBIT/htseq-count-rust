@@ -80,7 +80,7 @@ fn main() {
 
     // Read and index the annotation.
     let annotation_started = Instant::now();
-    let (gtf, feature_names) = read_gtf(&args.gtf, &args.t, &ref_names_to_id, &args);
+    let (gtf, feature_names, feature_metadata) = read_gtf(&args.gtf, &args.t, &ref_names_to_id, &args);
     if std::env::var_os("HTSEQ_COUNT_RUST_TIMINGS").is_some() {
         eprintln!(
             "__timing_annotation_total_seconds\t{:.6}",
@@ -113,6 +113,7 @@ fn main() {
     //std::process::exit(1);
 
     let mut counts = Counts::new(feature_names);
+    let _feature_metadata = feature_metadata;
     //let mut read_to_feature: Vec<FeatureType> = Vec::new();
     let mut counter = 0;
 
@@ -317,6 +318,33 @@ struct Args {
     e.g. for exons you might use -i gene_id -i exon_number."
     )]
     i: Vec<String>,
+
+    #[arg(
+        long = "additional-attr",
+        action = clap::ArgAction::Append,
+        help = "Additional GTF/GFF attribute to include as an output metadata column. May be specified multiple times."
+    )]
+    additional_attributes: Vec<String>,
+
+    #[arg(
+        long = "add-chromosome-info",
+        help = "Include each feature's chromosome as an additional output metadata column."
+    )]
+    add_chromosome_info: bool,
+
+    #[arg(
+        long = "feature-query",
+        value_name = "EXPRESSION",
+        help = "Restrict annotation features using an expression such as 'gene_name == \"ACTB\"'."
+    )]
+    feature_query: Option<String>,
+
+    #[arg(
+        short = 'q',
+        long = "quiet",
+        help = "Suppress progress output."
+    )]
+    quiet: bool,
 
     // Name and type of the bam file
     #[arg(value_name = "bam")]
@@ -549,12 +577,53 @@ fn parse_feature_id_bytes<'a>(
     Cow::Owned(joined)
 }
 
+#[derive(Debug, Clone)]
+struct FeatureMetadata {
+    column_names: Vec<String>,
+    values: Vec<Vec<String>>,
+}
+
+fn attribute_value<'a>(raw: &'a [u8], wanted: &str) -> Option<&'a str> {
+    let wanted = wanted.as_bytes();
+    for raw_attr in raw.split(|byte| *byte == b';') {
+        let attr = trim_ascii(raw_attr);
+        if attr.is_empty() {
+            continue;
+        }
+        let separator = attr
+            .iter()
+            .position(|byte| byte.is_ascii_whitespace() || *byte == b'=')?;
+        if &attr[..separator] != wanted {
+            continue;
+        }
+        let mut value = trim_ascii(&attr[separator + 1..]);
+        if value.len() >= 2 && value[0] == b'"' && value[value.len() - 1] == b'"' {
+            value = &value[1..value.len() - 1];
+        }
+        return Some(std::str::from_utf8(value).expect("Feature attribute is not valid UTF-8"));
+    }
+    None
+}
+
+fn parse_feature_query(query: Option<&str>) -> Option<(String, String)> {
+    let query = query?;
+    let (left, right) = query
+        .split_once("==")
+        .unwrap_or_else(|| panic!("Invalid --feature-query. Expected ATTRIBUTE == \"VALUE\""));
+    let attribute = left.trim();
+    let value = right.trim();
+    if attribute.is_empty() || value.len() < 2 || !value.starts_with('"') || !value.ends_with('"') {
+        panic!("Invalid --feature-query. Expected ATTRIBUTE == \"VALUE\"");
+    }
+    Some((attribute.to_string(), value[1..value.len() - 1].to_string()))
+}
+
 fn read_gtf(
     file_path: &str,
     feature_type_filter: &[String],
     ref_names_to_id: &HashMap<String, i32>,
     args: &Args,
-) -> (Vec<Option<IntervalTree>>, Vec<Arc<str>>) {
+) -> (Vec<Option<IntervalTree>>, Vec<Arc<str>>, FeatureMetadata) {
     let profile_timings = std::env::var_os("HTSEQ_COUNT_RUST_TIMINGS").is_some();
     let parse_started = Instant::now();
     let mut map: HashMap<i32, Vec<Interval>> = HashMap::new();
@@ -577,11 +646,19 @@ fn read_gtf(
     let mut next_chr_id = chromosome_ids.len() as i32;
     let mut feature_ids: HashMap<String, usize> = HashMap::new();
     let mut feature_names: Vec<Arc<str>> = Vec::new();
+    let mut metadata_column_names = args.additional_attributes.clone();
+    if args.add_chromosome_info {
+        metadata_column_names.push("Chromosome".to_string());
+    }
+    let mut metadata_values: Vec<Vec<String>> = Vec::new();
+    let feature_query = parse_feature_query(args.feature_query.as_deref());
 
     while reader.read_until(b'\n', &mut line).unwrap() > 0 {
         counter += 1;
-        if counter % 100000 == 0 {
-            eprintln!("{} GFF lines processed.", counter);
+        if !args.quiet && counter % 100000 == 0 {
+            if !args.quiet {
+        eprintln!("{} GFF lines processed.", counter);
+    }
         }
 
         while matches!(line.last(), Some(b'\n' | b'\r')) {
@@ -655,11 +732,34 @@ fn read_gtf(
             );
         }
 
-        let parsed_name =
-            parse_feature_id_bytes(attributes.unwrap(), &args.i, counter);
+        let attributes = attributes.unwrap();
+
+        if let Some((query_attribute, query_value)) = &feature_query {
+            if attribute_value(attributes, query_attribute)
+                .map(|value| value != query_value)
+                .unwrap_or(true)
+            {
+                line.clear();
+                continue;
+            }
+        }
+
+        let parsed_name = parse_feature_id_bytes(attributes, &args.i, counter);
+
+        let mut row_metadata: Vec<String> = args
+            .additional_attributes
+            .iter()
+            .map(|attribute| attribute_value(attributes, attribute).unwrap_or("").to_string())
+            .collect();
+        if args.add_chromosome_info {
+            row_metadata.push(chr_name.to_string());
+        }
 
         let (feature_id, feature_name) =
             if let Some(id) = feature_ids.get(parsed_name.as_ref()) {
+                if !row_metadata.is_empty() {
+                    metadata_values[*id] = row_metadata;
+                }
                 (*id, feature_names[*id].clone())
             } else {
                 let owned_name = parsed_name.into_owned();
@@ -667,6 +767,7 @@ fn read_gtf(
                 let shared_name: Arc<str> = Arc::from(owned_name.as_str());
                 feature_ids.insert(owned_name, id);
                 feature_names.push(shared_name.clone());
+                metadata_values.push(row_metadata);
                 (id, shared_name)
             };
 
@@ -692,7 +793,9 @@ fn read_gtf(
         );
     }
 
-    eprint!("Creating IntervalTree for each chromosome...");
+    if !args.quiet {
+        eprint!("Creating IntervalTree for each chromosome...");
+    }
     let index_started = Instant::now();
 
     let mut result: Vec<Option<IntervalTree>> = Vec::with_capacity(chromosome_ids.len());
@@ -703,14 +806,23 @@ fn read_gtf(
     for (chr, intervals) in map {
         result[chr as usize] = Some(IntervalTree::new(Some(intervals)));
     }
-    eprintln!("done.");
+    if !args.quiet {
+        eprintln!("done.");
+    }
     if profile_timings {
         eprintln!(
             "__timing_index_build_seconds\t{:.6}",
             index_started.elapsed().as_secs_f64()
         );
     }
-    (result, feature_names)
+    (
+        result,
+        feature_names,
+        FeatureMetadata {
+            column_names: metadata_column_names,
+            values: metadata_values,
+        },
+    )
 }
 
 fn should_skip_record(
