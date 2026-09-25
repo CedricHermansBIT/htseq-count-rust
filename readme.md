@@ -89,6 +89,18 @@ The direct dependencies are kept at their current stable releases:
 
 `Cargo.lock` is committed and CI builds with `--locked`.
 
+### Optional feature-tree export
+
+The Graphviz feature-tree export is disabled by default. Normal counting does not write or traverse the tree for DOT output.
+
+To export it explicitly:
+
+```bash
+htseq_count_rust --export-feature-tree feature_tree.dot reads.bam genes.gtf
+```
+
+The short form `-f feature_tree.dot` is also available. The older `--export_feature_map` spelling remains as an alias for compatibility. Exporting a large annotation can be slow and is intended mainly for debugging or inspection.
+
 ## Real-data benchmark
 
 A reproducible real-data benchmark is available in `benchmarks/benchmark_real_data.py`. It downloads real paired-end Pasilla RNA-seq chromosome 4 BAM files and the matching Drosophila BDGP5.78 GTF from Zenodo record 61771, then verifies the published MD5 checksums.
