@@ -60,28 +60,26 @@ impl Node {
     }
 
     pub fn from_sorted_intervals(intervals: Vec<Interval>) -> Option<Box<Node>> {
+        Node::from_sorted_slice(&intervals)
+    }
+
+    pub fn from_sorted_slice(intervals: &[Interval]) -> Option<Box<Node>> {
         if intervals.is_empty() {
-            None
-        } else {
-            let mid = intervals.len() / 2;
-            let mut s_center = HashSet::new();
-            s_center.insert(intervals[mid].clone());
-
-            let mut node = Node::new(intervals[mid].start, s_center);
-
-            let left_intervals = intervals[0..mid].to_vec();
-            let right_intervals = intervals[mid+1..].to_vec();
-
-            node.left_node = Node::from_sorted_intervals(left_intervals);
-            node.right_node = Node::from_sorted_intervals(right_intervals);
-
-            let mut node = Some(Box::new(node));
-            // rotate the tree to balance it
-            node = node?.rotate();
-            node
-
+            return None;
         }
 
+        // Choosing the median recursively already creates a balanced static
+        // tree. Build from slices so we do not allocate and clone left/right
+        // vectors at every recursion level.
+        let mid = intervals.len() / 2;
+        let mut s_center = HashSet::with_capacity(1);
+        s_center.insert(intervals[mid].clone());
+
+        let mut node = Node::new(intervals[mid].start, s_center);
+        node.left_node = Node::from_sorted_slice(&intervals[..mid]);
+        node.right_node = Node::from_sorted_slice(&intervals[mid + 1..]);
+        node.refresh_balance();
+        Some(Box::new(node))
     }
 
     pub fn center_hit(&self, interval: &Interval) -> bool {
