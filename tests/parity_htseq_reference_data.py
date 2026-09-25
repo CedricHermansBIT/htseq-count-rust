@@ -40,7 +40,7 @@ def compare(a, b):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--reference-dir", required=True)
-    ap.add_argument("--rust-bin", default="target/release/htseq_count_rust")
+    ap.add_argument("--rust-bin", default="target/release/tallyseq")
     ap.add_argument("--htseq-bin", default="htseq-count")
     args = ap.parse_args()
 
