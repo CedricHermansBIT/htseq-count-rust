@@ -208,6 +208,26 @@ def test_tabular(repo, rust, htseq, root, gtf, sam1, sam2):
     compare_tabular("gzip GTF", rr.stdout, hr.stdout, 1)
     print("[ OK ] gzip GTF")
 
+    duplicate_gtf = root / "duplicate_attributes.gtf"
+    duplicate_gtf.write_text(
+        'chr1\tcompat\texon\t100\t149\t.\t+\t.\t'
+        'gene_id "wrong"; gene_id "geneA"; gene_name "First"; gene_name "Last";\n'
+    )
+    rr = run([
+        rust, "-s", "no",
+        "--additional-attr", "gene_name",
+        str(sam1), str(duplicate_gtf)
+    ], repo)
+    hr = run([
+        htseq, "-s", "no",
+        "--additional-attr", "gene_name",
+        str(sam1), str(duplicate_gtf)
+    ], repo)
+    require_ok("Rust duplicate attributes", rr)
+    require_ok("HTSeq duplicate attributes", hr)
+    compare_tabular("duplicate attributes", rr.stdout, hr.stdout, 1, 1)
+    print("[ OK ] duplicate annotation attributes")
+
     gff3 = root / "features.gff3"
     gff3.write_text(
         "##gff-version 3\n"
