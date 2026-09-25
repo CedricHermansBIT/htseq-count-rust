@@ -8,6 +8,7 @@ on:
       - "src/**"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "benchmarks/benchmark_real_data.py"
       - ".github/workflows/perf-smoke.yml"
 
 jobs:
