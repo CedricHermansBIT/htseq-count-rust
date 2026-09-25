@@ -241,6 +241,38 @@ impl Node {
         result
     }
 
+    /// Append all intervals overlapping the inclusive query range [start, end].
+    ///
+    /// Each interval is stored at exactly one node, so this traversal does not
+    /// need the sort + dedup pass used by the older boundary-based query.
+    pub fn search_overlap_range_into<'a>(
+        &'a self,
+        start: i32,
+        end: i32,
+        result: &mut Vec<&'a Interval>,
+    ) {
+        for interval in &self.s_center {
+            if interval.start <= end && interval.end >= start {
+                result.push(interval);
+            }
+        }
+
+        // max_end_left includes the largest end coordinate reachable through
+        // the left subtree. Equality matters for inclusive intervals.
+        if start <= self.max_end_left {
+            if let Some(left_node) = &self.left_node {
+                left_node.search_overlap_range_into(start, end, result);
+            }
+        }
+
+        // Right-subtree intervals begin at or to the right of x_center.
+        if end >= self.x_center {
+            if let Some(right_node) = &self.right_node {
+                right_node.search_overlap_range_into(start, end, result);
+            }
+        }
+    }
+
     pub fn search_point(&self, point: i32) -> Vec<&Interval> {
         let mut result = Vec::new();
         for interval in &self.s_center {
