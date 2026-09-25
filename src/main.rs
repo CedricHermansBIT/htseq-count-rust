@@ -710,7 +710,7 @@ fn count_reads(reads_reader: &mut ReadsReader, counter: &mut i32, counts: &mut H
                         },
                         "random" => {
                             // we increment one of the feature names by 1
-                            let random_index = rand::random::<usize>() % feature_name_len;
+                            let random_index = rand::random_range(0..feature_name_len);
                             let feature_name = unique_feature_names[random_index].clone();
                             *counts.entry(feature_name).or_insert(0.0) += 1.0;
                         },
