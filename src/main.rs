@@ -3,11 +3,12 @@ use bam::{RecordReader,BamReader, RecordWriter, SamReader, SamWriter};
 use feature::Feature;
 use intervaltree::IntervalTree;
 use interval::Interval;
+use std::borrow::Cow;
 use std::cmp::{max, min};
 use std::collections::{HashMap, VecDeque};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Instant;
 use clap::Parser;
@@ -366,7 +367,7 @@ struct Args {
 }
 
 struct Counts {
-    feature_names: Vec<String>,
+    feature_names: Vec<Arc<str>>,
     feature_counts: Vec<f64>,
     no_feature: f64,
     ambiguous: f64,
@@ -376,7 +377,7 @@ struct Counts {
 }
 
 impl Counts {
-    fn new(feature_names: Vec<String>) -> Self {
+    fn new(feature_names: Vec<Arc<str>>) -> Self {
         let feature_counts = vec![0.0; feature_names.len()];
         Counts {
             feature_names,
@@ -428,11 +429,11 @@ fn parse_i32_ascii(value: &[u8]) -> i32 {
     result
 }
 
-fn parse_feature_id_bytes(
-    raw: &[u8],
+fn parse_feature_id_bytes<'a>(
+    raw: &'a [u8],
     id_attributes: &[String],
     line_number: usize,
-) -> String {
+) -> Cow<'a, str> {
     if id_attributes.len() == 1 {
         let wanted = id_attributes[0].as_bytes();
 
@@ -454,8 +455,10 @@ fn parse_feature_id_bytes(
                 if value.len() >= 2 && value[0] == b'"' && value[value.len() - 1] == b'"' {
                     value = &value[1..value.len() - 1];
                 }
-                return String::from_utf8(value.to_vec())
-                    .expect("Feature ID is not valid UTF-8");
+                return Cow::Borrowed(
+                    std::str::from_utf8(value)
+                        .expect("Feature ID is not valid UTF-8")
+                );
             }
         }
 
@@ -508,7 +511,7 @@ fn parse_feature_id_bytes(
             std::str::from_utf8(value).expect("Feature ID is not valid UTF-8")
         );
     }
-    joined
+    Cow::Owned(joined)
 }
 
 fn read_gtf(
@@ -516,7 +519,7 @@ fn read_gtf(
     feature_type_filter: &[String],
     ref_names_to_id: &HashMap<String, i32>,
     args: &Args,
-) -> (Vec<Option<IntervalTree>>, Vec<String>) {
+) -> (Vec<Option<IntervalTree>>, Vec<Arc<str>>) {
     let profile_timings = std::env::var_os("HTSEQ_COUNT_RUST_TIMINGS").is_some();
     let parse_started = Instant::now();
     let mut map: HashMap<i32, Vec<Interval>> = HashMap::new();
@@ -530,7 +533,7 @@ fn read_gtf(
     let mut chromosome_ids = ref_names_to_id.clone();
     let mut next_chr_id = chromosome_ids.len() as i32;
     let mut feature_ids: HashMap<String, usize> = HashMap::new();
-    let mut feature_names: Vec<String> = Vec::new();
+    let mut feature_names: Vec<Arc<str>> = Vec::new();
 
     while reader.read_until(b'\n', &mut line).unwrap() > 0 {
         counter += 1;
@@ -609,19 +612,24 @@ fn read_gtf(
             );
         }
 
-        let name = parse_feature_id_bytes(attributes.unwrap(), &args.i, counter);
-        let feature_id = if let Some(id) = feature_ids.get(name.as_str()) {
-            *id
-        } else {
-            let id = feature_names.len();
-            feature_ids.insert(name.clone(), id);
-            feature_names.push(name.clone());
-            id
-        };
+        let parsed_name =
+            parse_feature_id_bytes(attributes.unwrap(), &args.i, counter);
+
+        let (feature_id, feature_name) =
+            if let Some(id) = feature_ids.get(parsed_name.as_ref()) {
+                (*id, feature_names[*id].clone())
+            } else {
+                let owned_name = parsed_name.into_owned();
+                let id = feature_names.len();
+                let shared_name: Arc<str> = Arc::from(owned_name.as_str());
+                feature_ids.insert(owned_name, id);
+                feature_names.push(shared_name.clone());
+                (id, shared_name)
+            };
 
         let feature = Feature::new(
             feature_id,
-            name,
+            feature_name,
             chr_id,
             min(start, end),
             max(start, end),
@@ -706,7 +714,9 @@ fn should_skip_record(
 fn sorted_feature_indices(counts: &Counts) -> Vec<usize> {
     let mut indices: Vec<usize> = (0..counts.feature_names.len()).collect();
     indices.sort_unstable_by(|a, b| {
-        counts.feature_names[*a].cmp(&counts.feature_names[*b])
+        counts.feature_names[*a]
+            .as_ref()
+            .cmp(counts.feature_names[*b].as_ref())
     });
     indices
 }
@@ -882,7 +892,9 @@ fn assign_overlaps(
             let feature = unique_features[0];
             counts.add_feature(feature.id(), 1.0);
             if let Some(sender) = sender {
-                let _ = sender.send(FeatureType::Name(feature.name().to_string()));
+                let _ = sender.send(FeatureType::Name(
+                    counts.feature_names[feature.id()].to_string()
+                ));
             }
         }
         _ => {
@@ -910,7 +922,7 @@ fn assign_overlaps(
             if let Some(sender) = sender {
                 let mut names: Vec<&str> = unique_features
                     .iter()
-                    .map(|feature| feature.name())
+                    .map(|feature| counts.feature_names[feature.id()].as_ref())
                     .collect();
                 names.sort_unstable();
                 let _ = sender.send(FeatureType::Ambiguous(names.join("+")));
