@@ -9,7 +9,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 use std::sync::mpsc;
 use std::thread;
-use structopt::StructOpt;
+use clap::Parser;
 
 mod feature;
 mod intervaltree;
@@ -20,7 +20,7 @@ use node::Node;
 
 fn main() {
     // Command line arguments
-    let args = Args::from_args();
+    let args = Args::parse();
 
     if args.counts_output.is_some() {
         // check if we have write access to the file, otherwise, crash at the start instead of waiting until the end
@@ -240,12 +240,12 @@ impl FeatureType {
     }
 }
 
-// Use the structopt crate to parse command line arguments
-#[derive(StructOpt)]
+// Parse command line arguments with clap's derive API
+#[derive(Parser)]
 struct Args {
     // Number of threads
-    #[structopt(
-        short = "n",
+    #[arg(
+        short = 'n',
         long = "threads",
         default_value = "4",
         help = "Number of threads"
@@ -253,22 +253,22 @@ struct Args {
     n: u16,
 
     // Mode
-    #[structopt(short = "m", long = "mode", default_value = "union", possible_values = &["intersection-strict", "intersection-nonempty", "union"], help = "Mode to use for counting reads overlapping features. Possible values: intersection-strict, intersection-nonempty, union (default: intersection-strict).")]
+    #[arg(short = 'm', long = "mode", default_value = "union", value_parser = ["intersection-strict", "intersection-nonempty", "union"], help = "Mode to use for counting reads overlapping features. Possible values: intersection-strict, intersection-nonempty, union (default: intersection-strict).")]
     _m: String,
 
     // Stranded
-    #[structopt(
-        short = "s",
+    #[arg(
+        short = 's',
         long = "stranded",
         help = "Whether the data is from a strand-specific assay. Specify 'yes', 'no', or 'reverse' (default: yes). 'reverse' means 'yes' with reversed strand interpretation",
         default_value = "yes",
-        possible_values = &["yes", "no", "reverse"]
+        value_parser = ["yes", "no", "reverse"]
     )]
     stranded: String,
 
     // Quality filter
-    #[structopt(
-        short = "a",
+    #[arg(
+        short = 'a',
         long = "minaqual",
         default_value = "10",
         help = "Skip all reads with MAPQ alignment quality lower than the given minimum value (default: 10). MAPQ is the 5th column of a SAM/BAM file and its usage depends on the software used to map the reads."
@@ -276,22 +276,22 @@ struct Args {
     a: u8,
 
     // Type of feature to be used
-    #[structopt(
-        short = "t",
+    #[arg(
+        short = 't',
         long = "type",
         default_value = "exon",
-        number_of_values = 1,
+        num_args = 1,
         help = "Feature type (3rd column in GTF file) to be used. May be specified multiple times (default: exon)."
     )]
     t: Vec<String>,
 
     // Feature ID
     // TODO: implement actual logic for this option
-    #[structopt(
-        short = "i",
+    #[arg(
+        short = 'i',
         long = "idattr",
         default_value = "gene_id",
-        number_of_values = 1,
+        num_args = 1,
         help = "GTF attribute to be used as feature ID (default, suitable for Ensembl GTF files: gene_id). All feature of the right type (see -t option) within the same GTF
     attribute will be added together. The typical way of using this option is to count all exonic reads from each gene and add the exons but other uses are possible
     as well. You can call this option multiple times: in that case, the combination of all attributes separated by colons (:) will be used as a unique identifier,
@@ -300,31 +300,31 @@ struct Args {
     i: Vec<String>,
 
     // Name and type of the bam file
-    #[structopt(name = "bam")]
+    #[arg(value_name = "bam")]
     bam: String,
 
     // Name and type of the gtf file
-    #[structopt(name = "gtf")]
+    #[arg(value_name = "gtf")]
     gtf: String,
 
     // Secondary alignment mode
-    #[structopt(long = "secondary-alignments", default_value = "ignore", possible_values = &["score", "ignore"], help = "Whether to score secondary alignments (0x100 flag)")]
+    #[arg(long = "secondary-alignments", default_value = "ignore", value_parser = ["score", "ignore"], help = "Whether to score secondary alignments (0x100 flag)")]
     secondary_alignments: String,
 
     // Supplementary alignment mode
-    #[structopt(long = "supplementary-alignments", default_value = "ignore", possible_values = &["score", "ignore"], help = "Whether to score supplementary alignments (0x800 flag)")]
+    #[arg(long = "supplementary-alignments", default_value = "ignore", value_parser = ["score", "ignore"], help = "Whether to score supplementary alignments (0x800 flag)")]
     supplementary_alignments: String,
 
     // Option to also output a total count of uniquely mapped reads
-    #[structopt(
+    #[arg(
         long = "extended-output",
         help = "Also output a total count of uniquely mapped reads"
     )]
     counts: bool,
 
     // Output delimiter
-    #[structopt(
-        short = "d",
+    #[arg(
+        short = 'd',
         long = "delimiter",
         default_value = "\t",
         help = "Column delimiter in output (default: TAB)."
@@ -332,32 +332,32 @@ struct Args {
     delimiter: String,
 
     // non-unique parameter
-    #[structopt(
+    #[arg(
         long = "nonunique",
         default_value = "none",
-        possible_values = &["none", "all", "fraction","random"],
+        value_parser = ["none", "all", "fraction", "random"],
         help = "Whether and how to score reads that are not uniquely aligned or ambiguously assigned to features (choices: none, all, fraction, random; default: none)"
     )]
     nonunique: String,
 
     // Output file
-    #[structopt(
-        short = "c",
+    #[arg(
+        short = 'c',
         long = "counts_output",
         help = "Filename to output the counts to instead of stdout."
     )]
     counts_output: Option<String>,
 
     // Export feature map
-    #[structopt(
-        short = "f",
+    #[arg(
+        short = 'f',
         long = "export_feature_map",
         help = "Filename to output the feature map for debugging purposes."
     )]
     export_feature_tree: Option<String>,
 
-    #[structopt(
-        short = "o",
+    #[arg(
+        short = 'o',
         long = "samout",
         help = "Create a SAM file with the reads and their features."
     )]
