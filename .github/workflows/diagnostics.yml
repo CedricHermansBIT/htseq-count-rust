@@ -1,0 +1,32 @@
+name: Diagnostics parity
+
+on:
+  push:
+    branches:
+      - diagnostics
+  workflow_dispatch:
+
+jobs:
+  parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install HTSeq reference
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install HTSeq
+
+      - name: Show reference version
+        run: htseq-count --version
+
+      - name: Build Rust release
+        run: cargo build --release
+
+      - name: Run parity diagnostics
+        run: python tests/parity_against_htseq.py --rust-bin target/release/htseq_count_rust
