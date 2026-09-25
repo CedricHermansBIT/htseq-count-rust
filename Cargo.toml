@@ -15,8 +15,5 @@ flate2 = "1.1.10"
 rust-hdf5 = "0.5.2"
 tempfile = "3.23.0"
 
-[target.'cfg(windows)'.dependencies]
-rust-htslib = { version = "1.0.1", default-features = false, features = ["bzip2", "lzma"] }
-
 [target.'cfg(unix)'.dependencies]
 rust-htslib = "1.0.1"
