@@ -4,6 +4,8 @@ use std::io::{BufWriter, Write};
 use std::path::Path;
 
 pub struct OutputTable {
+    /// Number of annotation-derived rows before HTSeq's special __... rows.
+    pub real_feature_count: usize,
     pub feature_ids: Vec<String>,
     pub metadata_names: Vec<String>,
     pub metadata_values: Vec<Vec<String>>,
