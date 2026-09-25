@@ -584,7 +584,7 @@ struct Args {
         default_value = "10",
         help = "Skip all reads with MAPQ alignment quality lower than the given minimum value (default: 10). MAPQ is the 5th column of a SAM/BAM file and its usage depends on the software used to map the reads."
     )]
-    a: u8,
+    a: i32,
 
     // Type of feature to be used
     #[arg(
@@ -1161,7 +1161,7 @@ fn should_skip_record(
         }
     }
 
-    if record.mapq() < args.a {
+    if (record.mapq() as i32) < args.a {
         counts.too_low_aqual += 1.0;
         return Some(FeatureType::TooLowaQual);
     }
@@ -1487,8 +1487,8 @@ fn should_skip_pair(
         }
     }
 
-    let low_quality = first.map(|r| r.mapq() < args.a).unwrap_or(false)
-        || second.map(|r| r.mapq() < args.a).unwrap_or(false);
+    let low_quality = first.map(|r| (r.mapq() as i32) < args.a).unwrap_or(false)
+        || second.map(|r| (r.mapq() as i32) < args.a).unwrap_or(false);
     if low_quality {
         counts.too_low_aqual += 1.0;
         return Some(FeatureType::TooLowaQual);
