@@ -1,6 +1,7 @@
 name: Performance smoke
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - diagnostics
