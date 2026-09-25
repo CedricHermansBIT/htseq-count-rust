@@ -450,6 +450,35 @@ def test_formats(repo, rust, htseq, root, gtf, sam1, sam2):
         raise AssertionError("H5AD axes differ")
     print("[ OK ] H5AD sparse")
 
+    # H5AD annotation metadata, including HTSeq's missing values on special rows.
+    rust_h5_meta = root / "rust_meta.h5ad"
+    ht_h5_meta = root / "ht_meta.h5ad"
+    metadata_common = [
+        "-s","no",
+        "--additional-attr","gene_name",
+        "--add-chromosome-info",
+        sam1,sam2,gtf,
+    ]
+    rr = run([rust,*metadata_common,"-c",rust_h5_meta], repo)
+    hr = run([htseq,*metadata_common,"-c",ht_h5_meta], repo)
+    require_ok("Rust H5AD metadata", rr)
+    require_ok("HTSeq H5AD metadata", hr)
+    rmeta = anndata.read_h5ad(rust_h5_meta)
+    hmeta = anndata.read_h5ad(ht_h5_meta)
+    if list(rmeta.var_names) != list(hmeta.var_names):
+        raise AssertionError("H5AD metadata feature IDs differ")
+    for column in hmeta.var.columns:
+        if column not in rmeta.var.columns:
+            raise AssertionError(f"H5AD metadata missing column {column}")
+        for idx in hmeta.var_names:
+            rv = rmeta.var.loc[idx, column]
+            hv = hmeta.var.loc[idx, column]
+            if bool(np.asarray([np.isnan(rv) if isinstance(rv, float) else False])[0]) != bool(np.asarray([np.isnan(hv) if isinstance(hv, float) else False])[0]):
+                raise AssertionError(f"H5AD metadata missingness differs for {idx}/{column}: {rv!r} vs {hv!r}")
+            if not (isinstance(hv, float) and np.isnan(hv)) and str(rv) != str(hv):
+                raise AssertionError(f"H5AD metadata differs for {idx}/{column}: {rv!r} vs {hv!r}")
+    print("[ OK ] H5AD metadata")
+
     # Loom. HTSeq accepts the same count matrix; sparse flag is not needed.
     rust_loom = root / "rust.loom"
     ht_loom = root / "ht.loom"
@@ -462,6 +491,38 @@ def test_formats(repo, rust, htseq, root, gtf, sam1, sam2):
         if rds.shape != hds.shape or not np.array_equal(rds[:, :], hds[:, :]):
             raise AssertionError("Loom matrix differs")
     print("[ OK ] Loom")
+
+    # Exercise --counts-output-sparse for Loom as HTSeq accepts sparse input.
+    rust_loom_sparse = root / "rust_sparse.loom"
+    ht_loom_sparse = root / "ht_sparse.loom"
+    rr = run([rust,*common,"-c",rust_loom_sparse], repo)
+    hr = run([htseq,*common,"-c",ht_loom_sparse], repo)
+    require_ok("Rust Loom sparse", rr)
+    require_ok("HTSeq Loom sparse", hr)
+    with loompy.connect(str(rust_loom_sparse), mode="r") as rds, loompy.connect(str(ht_loom_sparse), mode="r") as hds:
+        if rds.shape != hds.shape or not np.array_equal(rds[:, :], hds[:, :]):
+            raise AssertionError("Sparse Loom matrix differs")
+    print("[ OK ] Loom sparse")
+
+    # Annotation metadata in Loom.
+    rust_loom_meta = root / "rust_meta.loom"
+    ht_loom_meta = root / "ht_meta.loom"
+    rr = run([rust,*metadata_common,"-c",rust_loom_meta], repo)
+    hr = run([htseq,*metadata_common,"-c",ht_loom_meta], repo)
+    if hr.returncode == 0:
+        require_ok("Rust Loom metadata", rr)
+        with loompy.connect(str(rust_loom_meta), mode="r") as rds, loompy.connect(str(ht_loom_meta), mode="r") as hds:
+            if set(rds.ra.keys()) != set(hds.ra.keys()):
+                raise AssertionError(f"Loom row attribute keys differ: {set(rds.ra.keys())} != {set(hds.ra.keys())}")
+            for key in hds.ra.keys():
+                if not np.array_equal(np.asarray(rds.ra[key]), np.asarray(hds.ra[key]), equal_nan=True):
+                    raise AssertionError(f"Loom row attribute {key} differs")
+        print("[ OK ] Loom metadata")
+    else:
+        # Some loompy/HTSeq combinations reject unequal-length metadata arrays.
+        # TallySeq may still support this case, but parity is not assertable
+        # against an upstream output file that HTSeq cannot create.
+        print("[SKIP] HTSeq Loom metadata output is unsupported by this upstream loompy stack")
 
 
 def main():
