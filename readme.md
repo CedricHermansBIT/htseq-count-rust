@@ -1,8 +1,8 @@
 # htseq-count-rust
 
-A Rust implementation of `htseq-count` for counting aligned reads or read pairs against GTF/GFF features. The goal is count compatibility with HTSeq while keeping BAM/SAM processing fast and memory-efficient.
+A Rust implementation of `htseq-count` focused on count compatibility with HTSeq while keeping alignment processing fast and memory-efficient.
 
-The implementation currently supports single-end and paired-end SAM/BAM input, all three HTSeq overlap modes, stranded counting, repeated feature types and ID attributes, multimapper handling, and secondary/supplementary alignment controls.
+The `diagnostics` branch is tested against HTSeq 2.1.2 and supports the main `htseq-count` command-line surface, including multiple input files, single-end and paired-end data, SAM/BAM/CRAM, stdin, compressed annotations, metadata columns, matrix output formats and annotated SAM/BAM output.
 
 ## Installation
 
@@ -19,129 +19,158 @@ The binary is created at `target/release/htseq_count_rust`.
 ## Usage
 
 ```bash
-# Single-end
-htseq_count_rust -s no alignments.bam genes.gtf
+# Single alignment file
+htseq_count_rust -s no sample.bam genes.gtf
 
-# Paired-end, query-name grouped input
-htseq_count_rust -r name -s reverse alignments.name.bam genes.gtf
+# Multiple samples in one count table
+htseq_count_rust -n 4 -s no sample1.bam sample2.bam sample3.cram genes.gtf.gz
+
+# Read a single alignment stream from stdin
+samtools view -h sample.bam | htseq_count_rust -s no - genes.gtf
 
 # Paired-end, coordinate-sorted input
-htseq_count_rust -r pos -s reverse alignments.sorted.bam genes.gtf
+htseq_count_rust -r pos -s reverse paired.sorted.bam genes.gtf
+
+# Include annotation metadata and a header
+htseq_count_rust \
+  --additional-attr gene_name \
+  --add-chromosome-info \
+  --with-header \
+  sample1.bam sample2.bam genes.gtf
 ```
 
-Only one alignment file is processed per invocation.
+The final positional file is the GTF/GFF annotation. All preceding positional files are alignment inputs.
 
-### Main options
+### HTSeq-compatible options
 
 - `-m, --mode`: `union`, `intersection-strict`, or `intersection-nonempty`. Default: `union`.
 - `-s, --stranded`: `yes`, `no`, or `reverse`. Default: `yes`.
-- `-t, --type`: feature type to count. Default: `exon`. May be supplied multiple times.
-- `-i, --idattr`: GTF/GFF attribute used as the feature ID. Default: `gene_id`. May be supplied multiple times; values are joined with `:`, matching HTSeq.
+- `-t, --type`: feature type. Default: `exon`. May be supplied repeatedly.
+- `-i, --idattr`: feature ID attribute. Default: `gene_id`. Repeated values are joined with `:`.
+- `--additional-attr`: add an annotation attribute column to the output. May be repeated.
+- `--add-chromosome-info`: add chromosome as an output metadata column.
+- `--feature-query`: filter annotation features, for example `gene_name == "ACTB"`.
 - `-a, --minaqual`: minimum MAPQ. Default: `10`.
-- `--nonunique`: `none`, `all`, `fraction`, or `random`. Default: `none`.
-- `--secondary-alignments`: `ignore` or `score`. Default: `ignore`.
-- `--supplementary-alignments`: `ignore` or `score`. Default: `ignore`.
-- `-r, --order`: paired-end input order, `name` or `pos`. Default: `name`. Ignored for single-end input.
-- `--max-reads-in-buffer`: maximum number of unmatched mate keys retained for coordinate-sorted paired-end data. Default: `30000000`.
-- `-n, --threads`: BAM decompression threads. Counting itself is currently single-threaded.
-- `-c, --counts_output`: write counts to a file instead of stdout.
-- `-o, --samout`: annotate single-end SAM output with `XF`. Paired-end `--samout` is not implemented yet.
-- `-d, --delimiter`: output delimiter. Default: tab.
-- `--extended-output`: also print the calculated number of uniquely mapped reads/fragments.
+- `--nonunique`: `none`, `all`, `fraction`, or `random`.
+- `--secondary-alignments`: `ignore` or `score`.
+- `--supplementary-alignments`: `ignore` or `score`.
+- `-r, --order`: paired-end input order, `name` or `pos`.
+- `--max-reads-in-buffer`: maximum unmatched-mate buffer for `--order pos`.
+- `-n, --nprocesses`: number of alignment files processed concurrently.
+- `-f, --format`: deprecated compatibility option. Accepted but ignored, matching modern HTSeq; input type is auto-detected.
+- `-q, --quiet`: suppress progress output.
+- `-d, --delimiter`: tabular output delimiter.
+- `-c, --counts_output`: write counts to a file.
+- `--with-header`: add input filenames as column headers.
+- `--append-output`: append tabular output to an existing file.
+- `--counts-output-sparse`: use sparse storage for supported matrix output formats.
+- `-o, --samout`: write annotated alignments with the `XF` assignment tag. Supply once per alignment input.
+- `-p, --samout-format`: `SAM` or `BAM`.
+- `--version`: print the program version.
+
+A Rust-specific `--threads` option controls BAM/CRAM decoding threads per input file. This is deliberately separate from HTSeq's `-n/--nprocesses`.
+
+### Input compatibility
+
+Normal local SAM and BAM files use the fast pure-Rust reader directly. HTSlib is used as a compatibility bridge when needed for:
+
+- CRAM
+- stdin
+- alignment files without a recognized extension
+- format autodetection outside the direct SAM/BAM path
+
+GTF/GFF annotations may be plain text or gzip-compressed (`.gz` / `.gzip`). The annotation parser accepts the common GTF/GFF2 and GFF3 attribute separators and handles quoted semicolons correctly.
+
+### Count output formats
+
+Without `-c`, counts are written as a tabular table to stdout. With `-c`, the suffix selects the output format:
+
+- `.tsv`, `.csv`, `.txt`: tabular output
+- `.mtx`: Matrix Market plus `_features.tsv` and `_samples.tsv`
+- `.h5ad`: AnnData/H5AD
+- `.loom`: Loom
+
+Matrix outputs use float32 values, matching HTSeq. `--counts-output-sparse` writes coordinate Matrix Market output and CSR-backed H5AD data.
+
+### Annotated SAM/BAM output
+
+`--samout` works for single-end and paired-end data, including name-grouped and position-sorted pairs. One output filename is required for each input alignment file.
+
+```bash
+htseq_count_rust \
+  -r pos \
+  -o sample1.annotated.bam \
+  -o sample2.annotated.bam \
+  -p BAM \
+  sample1.bam sample2.bam genes.gtf
+```
+
+The normal counting path does not create the SAM/BAM annotation machinery unless `--samout` is requested.
 
 ## Paired-end implementation
 
-Two streaming strategies are used rather than loading all read names into memory:
+Two streaming strategies are used rather than loading every read name into memory:
 
-- With `--order name`, only the current query-name group is retained. Alignments are paired using reciprocal mate status and coordinates, following HTSeq's name-sorted pairing behavior.
-- With `--order pos`, unmatched records are kept in a hash map keyed by query name, read number, alignment position, mate position and template length. A record is removed as soon as its reciprocal mate is encountered. This follows the same general bounded-buffer strategy used by HTSeq for position-sorted input.
+- With `--order name`, only the current query-name group is retained and reciprocal mates are paired within that group.
+- With `--order pos`, unmatched records are retained in a bounded hash map until their reciprocal mate is encountered.
 
-Secondary and supplementary records are removed before entering the pairing buffer when both are configured as `ignore`. Missing mates are still counted using the mate that is available, matching HTSeq.
+Missing mates are counted using the alignment that is available, matching HTSeq. The second mate's strand interpretation is inverted in stranded counting, also matching HTSeq.
 
 ## HTSeq compatibility testing
 
-The `diagnostics` branch contains differential tests that run this binary and HTSeq 2.1.2 on the same generated input and compare every feature and special count.
+The branch contains three complementary test layers:
 
-Coverage includes:
+1. generated differential tests against HTSeq 2.1.2;
+2. adversarial interval-boundary tests and official upstream HTSeq fixtures;
+3. an end-to-end compatibility suite for the broader CLI and file formats.
 
-- CIGAR `M`, `=`, `X`, insertions, deletions, skips and soft clipping
-- `union`, `intersection-strict`, and `intersection-nonempty`
-- stranded, unstranded and reverse-stranded counting
-- repeated `-t` and `-i`
-- MAPQ and `NH` handling
-- secondary and supplementary alignments
-- name-grouped and coordinate-sorted paired-end input
-- missing and unmapped mates
-- deterministic randomized differential cases
-- official HTSeq test fixtures, including its position-sorted paired BAM
+The compatibility suite covers:
 
-One unusual behavior is deliberately retained for compatibility with HTSeq 2.1.2: for paired reads, if mate 1 exists but has no `NH` tag, HTSeq's current implementation does not inspect an `NH` tag that is present only on mate 2. The Rust implementation mirrors that behavior so counts remain comparable.
+- multiple alignment inputs and `-n/--nprocesses`
+- headers, append mode and annotation metadata columns
+- `--feature-query`
+- gzipped annotations
+- stdin and extension-independent alignment detection
+- CRAM
+- single-end and paired-end `--samout`
+- SAM and BAM annotation output
+- coordinate-sorted paired `samout`
+- Matrix Market, sparse H5AD and Loom
 
-Randomized cases where HTSeq itself raises an exception are reported as reference errors and are not treated as evidence of a Rust mismatch.
+Core counting differential coverage includes CIGAR `M`, `=`, `X`, insertions, deletions, skipped regions and clipping; all overlap and strandedness modes; MAPQ/NH behavior; secondary/supplementary alignments; repeated feature types and ID attributes; and both paired-end ordering modes.
 
-## Dependency status
+One unusual behavior is deliberately retained for HTSeq 2.1.2 parity: if paired mate 1 exists but lacks an `NH` tag, current HTSeq does not inspect an `NH` tag present only on mate 2. The Rust implementation mirrors that behavior.
 
-The direct dependencies are kept at their current stable releases:
+## Dependencies and reproducible builds
 
-- `clap 4.6.7` with derive support
-- `bam 0.1.4` (this is still the newest release of the pure-Rust `bam` crate)
-- `rand 0.10.3`
+`Cargo.lock` is committed and CI builds with `cargo build --release --locked`.
 
-`Cargo.lock` is committed and CI builds with `--locked`.
+The implementation uses the lightweight pure-Rust `bam` crate on the normal SAM/BAM hot path. HTSlib is included for CRAM/stdin/autodetection compatibility, and `rust-hdf5` is used for native H5AD/Loom output.
 
 ### Optional feature-tree export
 
-The Graphviz feature-tree export is disabled by default. Normal counting does not write or traverse the tree for DOT output.
-
-To export it explicitly:
+The Graphviz feature-tree export is disabled by default and is not part of normal counting.
 
 ```bash
 htseq_count_rust --export-feature-tree feature_tree.dot reads.bam genes.gtf
 ```
 
-The short form `-f feature_tree.dot` is also available. The older `--export_feature_map` spelling remains as an alias for compatibility. Exporting a large annotation can be slow and is intended mainly for debugging or inspection.
+The older `--export_feature_map` spelling remains as an alias. There is intentionally no `-f` short form because `-f` belongs to HTSeq's deprecated `--format` option.
 
 ## Real-data benchmark
 
-A reproducible real-data benchmark is available in `benchmarks/benchmark_real_data.py`. It downloads real paired-end Pasilla RNA-seq chromosome 4 BAM files and the matching Drosophila BDGP5.78 GTF from Zenodo record 61771, then verifies the published MD5 checksums.
+A reproducible benchmark is available in `benchmarks/benchmark_real_data.py`. It downloads real paired-end Pasilla RNA-seq chromosome 4 BAM files and the matching Drosophila BDGP5.78 GTF from Zenodo record 61771 and verifies their published MD5 checksums.
 
-The benchmark treats count parity as a hard requirement. Feature IDs, special rows and numeric counts must be exactly equal after normalizing row order. No numeric tolerance is used. If even one count differs, that scenario fails and no successful performance result is recorded for it.
+Every benchmark scenario first requires exact count parity with HTSeq. A differing feature or special count invalidates that benchmark run.
 
-The default `full` profile runs 31 scenarios per dataset:
-
-- an 18-case core matrix covering single-end and paired-end input, all three overlap modes, and `no`, `yes`, and `reverse` strandedness;
-- targeted real-data cases for `--nonunique all` and `fraction`, MAPQ threshold changes, secondary/supplementary scoring, repeated feature types, repeated ID attributes, and paired `--order pos` versus `--order name`.
-
-The single-end BAM is generated reproducibly from mate 1 of the downloaded real paired-end BAM. Only pairing metadata is removed; the real alignment coordinates, CIGAR strings, MAPQ values, tags, strands and sequences are retained. A query-name sorted paired BAM is also generated automatically for the `--order name` case.
-
-`--nonunique random` is intentionally excluded from exact differential benchmarking because HTSeq and Rust use independent random-number generators, so ambiguous reads are not guaranteed to be assigned to the same feature even when both implementations are correct. Paired `--samout` is also excluded until paired SAM annotation is implemented.
-
-Run the full matrix locally with:
+The `full` profile covers single-end and paired-end data, all three overlap modes, all three strandedness modes, multimapper options, MAPQ thresholds, secondary/supplementary scoring, repeated feature types/IDs, and both paired input orderings.
 
 ```bash
 python -m pip install HTSeq
-python benchmarks/benchmark_real_data.py --build --profile full --repeats 1
-```
-
-For more stable timing numbers:
-
-```bash
 python benchmarks/benchmark_real_data.py --build --profile full --repeats 3
 ```
 
-To benchmark both included real BAMs:
-
-```bash
-python benchmarks/benchmark_real_data.py --build \
-  --profile full \
-  --dataset GSM461177 \
-  --dataset GSM461178 \
-  --repeats 3
-```
-
-Downloads and derived BAMs are cached under `benchmarks/data`. Results are written as JSON and Markdown under `benchmarks/results`, including per-scenario wall time, peak resident memory and exact-parity status. The script alternates which tool runs first between repeats to reduce systematic page-cache bias.
-
-There is also a manual GitHub Actions workflow named `Real-data benchmark`. It exposes `core` and `full` profiles and can run either one or both source BAMs.
+Downloads are cached under `benchmarks/data`; JSON and Markdown results are written under `benchmarks/results`.
 
 ## Performance
 
