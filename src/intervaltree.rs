@@ -334,19 +334,13 @@ impl IntervalTree {
     }
 
     pub fn overlap(&self, start: i32, end: i32) -> Vec<&Interval> {
-        // return a vector of all intervals that overlap with the given range
         if self.is_empty() || start > end {
             return Vec::new();
         }
+
         let root = self.top_node.as_ref().unwrap();
-        let mut result = root.search_point(start);
-        for (&key, _) in self.boundary_table.range(start..=end) {
-            result.extend(root.search_point(key));
-        }
-        // filter out duplicates
-        result.sort();
-        result.dedup();
-        
+        let mut result = Vec::new();
+        root.search_overlap_range_into(start, end, &mut result);
         result
     }
 
