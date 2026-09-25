@@ -23,64 +23,151 @@ mod input;
 
 use node::Node;
 
+struct RunResult {
+    counts: Counts,
+    counter: i32,
+    metadata: FeatureMetadata,
+}
+
 fn main() {
-    // Command line arguments
-    let args = Args::parse();
+    let mut args = Args::parse();
+    sanitize_repeated_options(&mut args);
 
-    let prepared_alignment = input::prepare_alignment(&args.bam, args.threads, &args.format)
-        .unwrap_or_else(|e| panic!("{}", e));
-    let effective_bam = prepared_alignment.path().to_string_lossy().to_string();
-
-    if args.counts_output.is_some() {
-        // check if we have write access to the file, otherwise, crash at the start instead of waiting until the end
-        if let Err(e) = File::create(args.counts_output.clone().unwrap()) {
-            eprintln!("Could not create file: {}", e);
-            std::process::exit(1);
-        }
+    if args.files.len() < 2 {
+        panic!("Expected at least one alignment file followed by one GTF/GFF file");
     }
 
-    // Try to open the bam file, if it fails, print an error message
-    let mut reads_reader = ReadsReader::from_path(effective_bam.clone(), args.threads, &args.format);
-    // Borrow the input header for normal setup. Only clone it when --samout is
-    // explicitly requested, because the writer thread then needs its own copy.
-    check_header_validity(reads_reader.header(), &args);
+    let features_file = args.files.last().unwrap().clone();
+    let alignment_files = args.files[..args.files.len() - 1].to_vec();
 
-    let reference_names: Vec<String> = reads_reader.header().reference_names().to_owned();
-    let ref_names_to_id: HashMap<String, i32> = reference_names.iter().enumerate().map(|(i, s)| (s.clone(), i as i32)).collect();
+    if alignment_files.iter().filter(|path| path.as_str() == "-").count() > 0
+        && alignment_files.len() != 1
+    {
+        panic!("Standard input ('-') can only be used as the sole alignment input");
+    }
 
-    // --samout is diagnostic/compatibility output and is completely opt-in.
-    // Normal counting does not create a channel, second reader, writer thread,
-    // or cloned BAM header/path for this feature.
-    let reader_threads = args.threads;
-    let (assignment_sender, writer_thread) = if let Some(output_sam) = args.output_sam.clone() {
-        let input_reads = effective_bam.clone();
-        let output_header = reads_reader.header().clone();
-        let (sender, receiver) = mpsc::channel::<FeatureType>();
-        let writer_thread = thread::spawn(move || {
-            let mut output_sam = SamWriter::from_path(output_sam, output_header)
-                .expect("Could not create output sam file");
-            let mut bam = ReadsReader::from_path(input_reads, reader_threads, "bam");
-            let mut record = bam::Record::new();
-            for type_ in receiver {
-                match bam.read_into(&mut record) {
-                    Ok(true) => (),
-                    Ok(false) => break,
-                    Err(e) => panic!("{}", e),
-                };
-                let feature = type_.as_bytes();
-                record.tags_mut().push_string(b"XF", &feature);
-                output_sam.write(&record).unwrap();
+    if !args.samouts.is_empty() && args.samouts.len() != alignment_files.len() {
+        panic!(
+            "Select the same number of --samout files as alignment inputs ({} inputs, {} outputs)",
+            alignment_files.len(),
+            args.samouts.len()
+        );
+    }
+
+    let samouts: Vec<Option<String>> = if args.samouts.is_empty() {
+        vec![None; alignment_files.len()]
+    } else {
+        args.samouts.iter().cloned().map(Some).collect()
+    };
+
+    let workers = args.nprocesses.max(1).min(alignment_files.len());
+    let mut results: Vec<Option<RunResult>> =
+        (0..alignment_files.len()).map(|_| None).collect();
+
+    for chunk_start in (0..alignment_files.len()).step_by(workers) {
+        let chunk_end = (chunk_start + workers).min(alignment_files.len());
+        thread::scope(|scope| {
+            let mut handles = Vec::new();
+            for index in chunk_start..chunk_end {
+                let input = alignment_files[index].clone();
+                let samout = samouts[index].clone();
+                let features_file = features_file.clone();
+                let args_ref = &args;
+                handles.push(scope.spawn(move || {
+                    (
+                        index,
+                        count_one_alignment(
+                            args_ref,
+                            &input,
+                            &features_file,
+                            samout,
+                            index == 0,
+                        ),
+                    )
+                }));
+            }
+
+            for handle in handles {
+                let (index, result) = handle.join().unwrap();
+                results[index] = Some(result);
             }
         });
-        (Some(sender), Some(writer_thread))
-    } else {
-        (None, None)
-    };
-    // bam fields: https://docs.rs/bam/0.3.0/bam/record/struct.Record.html
+    }
 
-    // Read and index the annotation.
+    let results: Vec<RunResult> =
+        results.into_iter().map(|result| result.unwrap()).collect();
+
+    write_count_results(&results, &alignment_files, &args);
+}
+
+fn sanitize_repeated_options(args: &mut Args) {
+    fn dedup(values: &mut Vec<String>) {
+        let mut seen = HashMap::new();
+        values.retain(|value| seen.insert(value.clone(), ()).is_none());
+    }
+    dedup(&mut args.t);
+    dedup(&mut args.i);
+    dedup(&mut args.additional_attributes);
+}
+
+fn count_one_alignment(
+    base_args: &Args,
+    input_path: &str,
+    features_file: &str,
+    samout: Option<String>,
+    export_tree: bool,
+) -> RunResult {
+    let mut args = base_args.clone();
+    args.current_output_sam = samout;
+
+    let prepared_alignment =
+        input::prepare_alignment(input_path, args.threads, &args.format)
+            .unwrap_or_else(|e| panic!("{}", e));
+    let effective_bam = prepared_alignment.path().to_string_lossy().to_string();
+
+    let mut reads_reader =
+        ReadsReader::from_path(effective_bam.clone(), args.threads, &args.format);
+    check_header_validity(reads_reader.header(), input_path, &args);
+
+    let reference_names: Vec<String> =
+        reads_reader.header().reference_names().to_owned();
+    let ref_names_to_id: HashMap<String, i32> = reference_names
+        .iter()
+        .enumerate()
+        .map(|(i, name)| (name.clone(), i as i32))
+        .collect();
+
+    let reader_threads = args.threads;
+    let (assignment_sender, writer_thread) =
+        if let Some(output_sam) = args.current_output_sam.clone() {
+            let input_reads = effective_bam.clone();
+            let output_header = reads_reader.header().clone();
+            let (sender, receiver) = mpsc::channel::<FeatureType>();
+            let writer_thread = thread::spawn(move || {
+                let mut output_sam = SamWriter::from_path(output_sam, output_header)
+                    .expect("Could not create output SAM file");
+                let mut bam =
+                    ReadsReader::from_path(input_reads, reader_threads, "bam");
+                let mut record = bam::Record::new();
+                for assignment in receiver {
+                    match bam.read_into(&mut record) {
+                        Ok(true) => (),
+                        Ok(false) => break,
+                        Err(e) => panic!("{}", e),
+                    };
+                    let feature = assignment.as_bytes();
+                    record.tags_mut().push_string(b"XF", &feature);
+                    output_sam.write(&record).unwrap();
+                }
+            });
+            (Some(sender), Some(writer_thread))
+        } else {
+            (None, None)
+        };
+
     let annotation_started = Instant::now();
-    let (gtf, feature_names, feature_metadata) = read_gtf(&args.gtf, &args.t, &ref_names_to_id, &args);
+    let (gtf, feature_names, feature_metadata) =
+        read_gtf(features_file, &args.t, &ref_names_to_id, &args);
     if std::env::var_os("HTSEQ_COUNT_RUST_TIMINGS").is_some() {
         eprintln!(
             "__timing_annotation_total_seconds\t{:.6}",
@@ -88,35 +175,29 @@ fn main() {
         );
     }
 
-    // let read= 21940455;
-    // eprintln!("Searching for reads overlapping position {}-{}...", read, read+25);
-    // for overlap in gtf["1"].overlap(read, read+25) {
-    //      eprintln!("overlap: {:?}", overlap);
-    // }
-
-    
-    // DOT export is deliberately opt-in. Normal counting does no export I/O
-    // and does not clone the interval tree.
-    if let Some(export_path) = args.export_feature_tree.as_deref() {
-        eprintln!("Exporting feature tree to {}...", export_path);
-        let mut file = File::create(export_path).expect("Unable to create feature-tree DOT file");
-        for (chr, tree) in gtf.iter().enumerate().take(reference_names.len()) {
-            if let Some(tree) = tree {
-                if let Some(top_node) = &tree.top_node {
-                    let _ = top_node.write_structure(&mut file, 0, &reference_names[chr]);
+    if export_tree {
+        if let Some(export_path) = args.export_feature_tree.as_deref() {
+            if !args.quiet {
+                eprintln!("Exporting feature tree to {}...", export_path);
+            }
+            let mut file = File::create(export_path)
+                .expect("Unable to create feature-tree DOT file");
+            for (chr, tree) in gtf.iter().enumerate().take(reference_names.len()) {
+                if let Some(tree) = tree {
+                    if let Some(top_node) = &tree.top_node {
+                        let _ = top_node.write_structure(
+                            &mut file,
+                            0,
+                            &reference_names[chr],
+                        );
+                    }
                 }
             }
         }
     }
-    
-    // exit(1) to prevent the rest of the program from running for debugging purposes
-    //std::process::exit(1);
 
     let mut counts = Counts::new(feature_names);
-    let _feature_metadata = feature_metadata;
-    //let mut read_to_feature: Vec<FeatureType> = Vec::new();
     let mut counter = 0;
-
     let counting_started = Instant::now();
     count_reads(
         &mut reads_reader,
@@ -133,29 +214,154 @@ fn main() {
         );
     }
 
-    // Closing the sender lets the SAM writer terminate its receive loop.
     drop(assignment_sender);
     if let Some(writer_thread) = writer_thread {
-        eprintln!("Waiting for writer thread to finish...");
+        if !args.quiet {
+            eprintln!("Waiting for SAM writer thread to finish...");
+        }
         writer_thread.join().unwrap();
     }
-    
-    if args.counts_output.is_some() {
-        write_counts(counts, args, counter);
-    } else {
-        print_output(counts, args, counter);
+
+    RunResult {
+        counts,
+        counter,
+        metadata: feature_metadata,
     }
 }
 
-fn check_header_validity(header: &bam::Header, args: &Args) {
+fn check_header_validity(header: &bam::Header, input_path: &str, args: &Args) {
     if header.lines().count() == 0 {
-        if args.format == "bam" || args.bam.to_ascii_lowercase().ends_with(".bam") {
-            eprintln!("The header of the bam file is empty. This is likely due to an invalid bam file.");
+        if args.format == "bam" || input_path.to_ascii_lowercase().ends_with(".bam") {
+            panic!("The BAM header is empty. The input file is likely invalid.");
         } else {
-            eprintln!("The header of the sam file is empty. This is likely due to an invalid sam file. (If you used samtools to convert a bam file to a sam file, make sure to use the -h option to include the header in the output file.)");
-        std::process::exit(1);
+            panic!(
+                "The SAM header is empty. If converted with samtools, include the header with -h."
+            );
         }
     }
+}
+
+fn write_count_results(results: &[RunResult], sample_names: &[String], args: &Args) {
+    if results.is_empty() {
+        return;
+    }
+
+    validate_result_layout(results);
+
+    if let Some(path) = args.counts_output.as_deref() {
+        let mut options = std::fs::OpenOptions::new();
+        options.create(true).write(true);
+        if args.append_output {
+            options.append(true);
+        } else {
+            options.truncate(true);
+        }
+        let file = options
+            .open(path)
+            .unwrap_or_else(|e| panic!("Could not open count output '{}': {}", path, e));
+        let mut writer = std::io::BufWriter::new(file);
+        write_tabular_counts(&mut writer, results, sample_names, args).unwrap();
+    } else {
+        let stdout = std::io::stdout();
+        let mut writer = stdout.lock();
+        write_tabular_counts(&mut writer, results, sample_names, args).unwrap();
+    }
+}
+
+fn validate_result_layout(results: &[RunResult]) {
+    let first = &results[0].counts.feature_names;
+    for result in &results[1..] {
+        if result.counts.feature_names.len() != first.len()
+            || result
+                .counts
+                .feature_names
+                .iter()
+                .zip(first.iter())
+                .any(|(a, b)| a.as_ref() != b.as_ref())
+        {
+            panic!("Feature IDs differ between alignment-file counting runs");
+        }
+    }
+}
+
+fn write_tabular_counts<W: Write>(
+    writer: &mut W,
+    results: &[RunResult],
+    sample_names: &[String],
+    args: &Args,
+) -> std::io::Result<()> {
+    let first = &results[0];
+    let metadata = &first.metadata;
+    let delimiter = &args.delimiter;
+
+    if args.with_header {
+        write!(writer, "{}", delimiter)?;
+        for _ in &metadata.column_names {
+            write!(writer, "{}", delimiter)?;
+        }
+        for (index, sample) in sample_names.iter().enumerate() {
+            if index != 0 {
+                write!(writer, "{}", delimiter)?;
+            }
+            write!(writer, "{}", sample)?;
+        }
+        writeln!(writer)?;
+    }
+
+    for feature_id in sorted_feature_indices(&first.counts) {
+        write!(writer, "{}", first.counts.feature_names[feature_id])?;
+        if let Some(values) = metadata.values.get(feature_id) {
+            for value in values {
+                write!(writer, "{}{}", delimiter, value)?;
+            }
+        }
+        for result in results {
+            write!(
+                writer,
+                "{}{}",
+                delimiter,
+                result.counts.feature_counts[feature_id]
+            )?;
+        }
+        writeln!(writer)?;
+    }
+
+    let special_rows: [(&str, fn(&Counts) -> f64); 5] = [
+        ("__no_feature", |counts| counts.no_feature),
+        ("__ambiguous", |counts| counts.ambiguous),
+        ("__too_low_aQual", |counts| counts.too_low_aqual),
+        ("__not_aligned", |counts| counts.not_aligned),
+        ("__alignment_not_unique", |counts| counts.alignment_not_unique),
+    ];
+
+    for (name, value) in special_rows {
+        write!(writer, "{}", name)?;
+        for _ in &metadata.column_names {
+            write!(writer, "{}", delimiter)?;
+        }
+        for result in results {
+            write!(writer, "{}{}", delimiter, value(&result.counts))?;
+        }
+        writeln!(writer)?;
+    }
+
+    if args.counts {
+        write!(writer, "Total number of uniquely mapped reads")?;
+        for _ in &metadata.column_names {
+            write!(writer, "{}", delimiter)?;
+        }
+        for result in results {
+            write!(
+                writer,
+                "{}{}",
+                delimiter,
+                result.counter as f64 - result.counts.special_total()
+            )?;
+        }
+        writeln!(writer)?;
+    }
+
+    Ok(())
 }
 
 enum ReadsReader {
@@ -346,13 +552,12 @@ struct Args {
     )]
     quiet: bool,
 
-    // Name and type of the bam file
-    #[arg(value_name = "bam")]
-    bam: String,
-
-    // Name and type of the gtf file
-    #[arg(value_name = "gtf")]
-    gtf: String,
+    #[arg(
+        value_name = "ALIGNMENT... GTF",
+        num_args = 2..,
+        help = "One or more alignment files followed by the GTF/GFF annotation file. Use '-' for a single stdin alignment."
+    )]
+    files: Vec<String>,
 
     // Input ordering for paired-end data
     #[arg(
@@ -412,6 +617,24 @@ struct Args {
     )]
     counts_output: Option<String>,
 
+    #[arg(
+        long = "counts-output-sparse",
+        help = "Store matrix-style count output sparsely where the selected output format supports it."
+    )]
+    counts_output_sparse: bool,
+
+    #[arg(
+        long = "append-output",
+        help = "Append tabular count output instead of truncating the destination."
+    )]
+    append_output: bool,
+
+    #[arg(
+        long = "with-header",
+        help = "Add a header row containing the input alignment filenames."
+    )]
+    with_header: bool,
+
     // Export feature map
     #[arg(
         long = "export-feature-tree",
@@ -424,9 +647,22 @@ struct Args {
     #[arg(
         short = 'o',
         long = "samout",
-        help = "Optional diagnostic output: write alignments to a SAM file with an XF feature-assignment tag. Disabled by default and not needed for counting."
+        action = clap::ArgAction::Append,
+        help = "Write annotated alignments with an XF assignment tag. Supply once per input alignment."
     )]
-    output_sam: Option<String>,
+    samouts: Vec<String>,
+
+    #[arg(
+        short = 'p',
+        long = "samout-format",
+        default_value = "SAM",
+        value_parser = ["SAM", "BAM", "sam", "bam"],
+        help = "Output format used with --samout: SAM or BAM (default: SAM)."
+    )]
+    samout_format: String,
+
+    #[arg(skip)]
+    current_output_sam: Option<String>,
 }
 
 struct Counts {
@@ -1095,8 +1331,8 @@ fn count_single_record(
     sender: Option<&mpsc::Sender<FeatureType>>,
 ) {
     *counter += 1;
-    if *counter % 100000 == 0 {
-        eprintln!("{} records processed.", counter);
+    if !args.quiet && *counter % 100000 == 0 {
+        if !args.quiet { eprintln!("{} records processed.", counter); }
     }
 
     if should_skip_record(record, counts, args, sender) {
@@ -1222,8 +1458,8 @@ fn count_pair(
     sender: Option<&mpsc::Sender<FeatureType>>,
 ) {
     *counter += 1;
-    if *counter % 100000 == 0 {
-        eprintln!("{} read pairs processed.", counter);
+    if !args.quiet && *counter % 100000 == 0 {
+        if !args.quiet { eprintln!("{} read pairs processed.", counter); }
     }
 
     if should_skip_pair(first, second, counts, args, sender) {
@@ -1526,7 +1762,7 @@ fn count_reads(
     }
 
     if record.flag().is_paired() {
-        if args.output_sam.is_some() {
+        if args.current_output_sam.is_some() {
             panic!(
                 "--samout is not yet supported for paired-end input. \
                  Counting is supported; SAM annotation needs an order-aware writer."
