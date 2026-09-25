@@ -67,6 +67,29 @@ fn main() {
         args.samouts.iter().cloned().map(Some).collect()
     };
 
+    // Parse and index the annotation once. The resulting per-chromosome trees,
+    // feature names and metadata are immutable and shared across all alignment
+    // files. This mirrors HTSeq's load-once/process-many structure and avoids
+    // reparsing/rebuilding a large GTF for every BAM.
+    let annotation = Arc::new(load_annotation(&features_file, &args.t, &args));
+
+    if let Some(export_path) = args.export_feature_tree.as_deref() {
+        if !args.quiet {
+            eprintln!("Exporting feature tree to {}...", export_path);
+        }
+        let mut file = File::create(export_path)
+            .expect("Unable to create feature-tree DOT file");
+        let mut chromosomes: Vec<&String> = annotation.trees_by_chrom.keys().collect();
+        chromosomes.sort_unstable();
+        for chromosome in chromosomes {
+            if let Some(tree) = annotation.trees_by_chrom.get(chromosome) {
+                if let Some(top_node) = &tree.top_node {
+                    let _ = top_node.write_structure(&mut file, 0, chromosome);
+                }
+            }
+        }
+    }
+
     let workers = args.nprocesses.max(1).min(alignment_files.len());
     let mut results: Vec<Option<RunResult>> =
         (0..alignment_files.len()).map(|_| None).collect();
@@ -78,17 +101,16 @@ fn main() {
             for index in chunk_start..chunk_end {
                 let input = alignment_files[index].clone();
                 let samout = samouts[index].clone();
-                let features_file = features_file.clone();
                 let args_ref = &args;
+                let annotation_ref = annotation.as_ref();
                 handles.push(scope.spawn(move || {
                     (
                         index,
                         count_one_alignment(
                             args_ref,
                             &input,
-                            &features_file,
                             samout,
-                            index == 0,
+                            annotation_ref,
                         ),
                     )
                 }));
@@ -119,9 +141,8 @@ fn sanitize_repeated_options(args: &mut Args) {
 fn count_one_alignment(
     base_args: &Args,
     input_path: &str,
-    features_file: &str,
     samout: Option<String>,
-    export_tree: bool,
+    annotation: &SharedAnnotation,
 ) -> RunResult {
     let mut args = base_args.clone();
     args.current_output_sam = samout;
@@ -139,47 +160,18 @@ fn count_one_alignment(
 
     let reference_names: Vec<String> =
         reads_reader.header().reference_names().to_owned();
-    let ref_names_to_id: HashMap<String, i32> = reference_names
+
+    // Build only the cheap BAM-reference-ID -> shared chromosome-tree mapping.
+    // The trees themselves are shared by Arc and are not rebuilt per file.
+    let gtf: Vec<Option<Arc<IntervalTree>>> = reference_names
         .iter()
-        .enumerate()
-        .map(|(i, name)| (name.clone(), i as i32))
+        .map(|name| annotation.trees_by_chrom.get(name).cloned())
         .collect();
 
     let assignment_store: Option<AssignmentStore> =
         args.current_output_sam.as_ref().map(|_| Arc::new(Mutex::new(HashMap::new())));
 
-    let annotation_started = Instant::now();
-    let (gtf, feature_names, feature_metadata) =
-        read_gtf(features_file, &args.t, &ref_names_to_id, &args);
-    if std::env::var_os("HTSEQ_COUNT_RUST_TIMINGS").is_some() {
-        eprintln!(
-            "__timing_annotation_total_seconds\t{:.6}",
-            annotation_started.elapsed().as_secs_f64()
-        );
-    }
-
-    if export_tree {
-        if let Some(export_path) = args.export_feature_tree.as_deref() {
-            if !args.quiet {
-                eprintln!("Exporting feature tree to {}...", export_path);
-            }
-            let mut file = File::create(export_path)
-                .expect("Unable to create feature-tree DOT file");
-            for (chr, tree) in gtf.iter().enumerate().take(reference_names.len()) {
-                if let Some(tree) = tree {
-                    if let Some(top_node) = &tree.top_node {
-                        let _ = top_node.write_structure(
-                            &mut file,
-                            0,
-                            &reference_names[chr],
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    let mut counts = Counts::new(feature_names);
+    let mut counts = Counts::new(annotation.feature_names.clone());
     let mut counter = 0;
     let counting_started = Instant::now();
     count_reads(
@@ -212,7 +204,7 @@ fn count_one_alignment(
     RunResult {
         counts,
         counter,
-        metadata: feature_metadata,
+        metadata: annotation.metadata.clone(),
     }
 }
 
