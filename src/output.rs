@@ -9,7 +9,7 @@ pub struct OutputTable {
     pub metadata_values: Vec<Vec<String>>,
     pub sample_names: Vec<String>,
     /// Sample-major matrix with shape [n_samples, n_features].
-    pub values: Vec<f32>,
+    pub values: Vec<f64>,
 }
 
 impl OutputTable {
@@ -21,7 +21,7 @@ impl OutputTable {
         self.sample_names.len()
     }
 
-    pub fn value(&self, sample: usize, feature: usize) -> f32 {
+    pub fn value(&self, sample: usize, feature: usize) -> f64 {
         self.values[sample * self.n_features() + feature]
     }
 }
@@ -120,7 +120,7 @@ fn write_mtx(path: &str, table: &OutputTable, sparse: bool) -> Result<(), String
             .map_err(|e| e.to_string())?;
         for sample in 0..table.n_samples() {
             for feature in 0..table.n_features() {
-                let value = table.value(sample, feature);
+                let value = table.value(sample, feature) as f32;
                 if value != 0.0 {
                     writeln!(out, "{} {} {}", sample + 1, feature + 1, value)
                         .map_err(|e| e.to_string())?;
@@ -135,7 +135,7 @@ fn write_mtx(path: &str, table: &OutputTable, sparse: bool) -> Result<(), String
         // Matrix Market array format is column-major.
         for feature in 0..table.n_features() {
             for sample in 0..table.n_samples() {
-                writeln!(out, "{}", table.value(sample, feature))
+                writeln!(out, "{}", table.value(sample, feature) as f32)
                     .map_err(|e| e.to_string())?;
             }
         }
@@ -201,12 +201,13 @@ fn write_h5ad(path: &str, table: &OutputTable) -> Result<(), String> {
     file.set_attr_string("encoding-version", "0.1.0")
         .map_err(|e| e.to_string())?;
 
+    let matrix_f32: Vec<f32> = table.values.iter().map(|value| *value as f32).collect();
     let x = file
         .new_dataset::<f32>()
         .shape(&[table.n_samples(), table.n_features()])
         .create("X")
         .map_err(|e| e.to_string())?;
-    x.write_raw(&table.values).map_err(|e| e.to_string())?;
+    x.write_raw(&matrix_f32).map_err(|e| e.to_string())?;
     set_dataset_string_attr(&x, "encoding-type", "array")?;
     set_dataset_string_attr(&x, "encoding-version", "0.2.0")?;
 
@@ -264,7 +265,7 @@ fn write_loom(path: &str, table: &OutputTable) -> Result<(), String> {
     for feature in 0..table.n_features() {
         for sample in 0..table.n_samples() {
             matrix[feature * table.n_samples() + sample] =
-                table.value(sample, feature);
+                table.value(sample, feature) as f32;
         }
     }
     let dataset = file
