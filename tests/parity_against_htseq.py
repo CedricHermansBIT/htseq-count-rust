@@ -211,6 +211,14 @@ CASES = [
      ],
      opts(nonunique="all", order="name")),
 
+    ("paired_end_nh_second_only_htseq_quirk",
+     [exon(100,300,"geneA")],
+     [
+         paired_sam("pair1", 99, 120, 220),
+         paired_sam("pair1", 147, 220, 120, tags=("NH:i:2",)),
+     ],
+     opts(nonunique="none", order="name")),
+
     ("paired_end_position_sorted_interleaved",
      [exon(90,330,"geneA")],
      [
