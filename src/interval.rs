@@ -136,7 +136,7 @@ impl Ord for Interval {
         // first by start, then by end, then by data.name (alphabetically)
         self.start.cmp(&other.start)
             .then(self.end.cmp(&other.end))
-            .then(self.data.as_ref().unwrap().name().cmp(&other.data.as_ref().unwrap().name()))
+            .then(self.data.as_ref().unwrap().id().cmp(&other.data.as_ref().unwrap().id()))
 
     }
 }
