@@ -208,6 +208,27 @@ def test_tabular(repo, rust, htseq, root, gtf, sam1, sam2):
     compare_tabular("gzip GTF", rr.stdout, hr.stdout, 1)
     print("[ OK ] gzip GTF")
 
+    gff3 = root / "features.gff3"
+    gff3.write_text(
+        "##gff-version 3\n"
+        "chr1\tcompat\texon\t100\t149\t.\t+\t.\t"
+        "gene_id=geneA;gene_name=Alpha;transcript_id=txA\n"
+        "chr1\tcompat\texon\t200\t249\t.\t-\t.\t"
+        "gene_id=geneB;gene_name=Beta;transcript_id=txB\n"
+    )
+    rr = run([
+        rust, "-s", "no", "--additional-attr", "gene_name",
+        str(sam1), str(gff3)
+    ], repo)
+    hr = run([
+        htseq, "-s", "no", "--additional-attr", "gene_name",
+        str(sam1), str(gff3)
+    ], repo)
+    require_ok("Rust GFF3", rr)
+    require_ok("HTSeq GFF3", hr)
+    compare_tabular("GFF3", rr.stdout, hr.stdout, 1, 1)
+    print("[ OK ] GFF3")
+
     sam_text = sam1.read_text()
     rr = run([rust,"-s","no","-",str(gtf)], repo, input_text=sam_text)
     hr = run([htseq,"-s","no","-",str(gtf)], repo, input_text=sam_text)
