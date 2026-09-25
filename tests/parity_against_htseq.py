@@ -138,6 +138,11 @@ CASES = [
      [sam("r1", flag=16, pos=100, cigar="10M")],
      opts(stranded="yes")),
 
+    ("same_id_opposite_strands",
+     [exon(100,109,"geneA", strand="+"), exon(100,109,"geneA", strand="-")],
+     [sam("r1", flag=0, pos=100, cigar="10M")],
+     opts(stranded="yes")),
+
     ("paired_end_same_gene",
      [exon(100,300,"geneA")],
      [paired_sam("pair1", 99, 120, 220), paired_sam("pair1", 147, 220, 120)],
