@@ -8,22 +8,28 @@ use std::borrow::Cow;
 use std::cmp::{max, min};
 use std::collections::VecDeque;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read as IoRead, Write};
 use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Instant;
 use clap::Parser;
+use flate2::read::MultiGzDecoder;
 
 mod feature;
 mod intervaltree;
 mod interval;
 mod node;
+mod input;
 
 use node::Node;
 
 fn main() {
     // Command line arguments
     let args = Args::parse();
+
+    let prepared_alignment = input::prepare_alignment(&args.bam, args.threads, &args.format)
+        .unwrap_or_else(|e| panic!("{}", e));
+    let effective_bam = prepared_alignment.path().to_string_lossy().to_string();
 
     if args.counts_output.is_some() {
         // check if we have write access to the file, otherwise, crash at the start instead of waiting until the end
@@ -34,7 +40,7 @@ fn main() {
     }
 
     // Try to open the bam file, if it fails, print an error message
-    let mut reads_reader = ReadsReader::from_path(args.bam.clone(), args.n);
+    let mut reads_reader = ReadsReader::from_path(effective_bam.clone(), args.threads, &args.format);
     // Borrow the input header for normal setup. Only clone it when --samout is
     // explicitly requested, because the writer thread then needs its own copy.
     check_header_validity(reads_reader.header(), &args);
@@ -45,15 +51,15 @@ fn main() {
     // --samout is diagnostic/compatibility output and is completely opt-in.
     // Normal counting does not create a channel, second reader, writer thread,
     // or cloned BAM header/path for this feature.
-    let reader_threads = args.n;
+    let reader_threads = args.threads;
     let (assignment_sender, writer_thread) = if let Some(output_sam) = args.output_sam.clone() {
-        let input_reads = args.bam.clone();
+        let input_reads = effective_bam.clone();
         let output_header = reads_reader.header().clone();
         let (sender, receiver) = mpsc::channel::<FeatureType>();
         let writer_thread = thread::spawn(move || {
             let mut output_sam = SamWriter::from_path(output_sam, output_header)
                 .expect("Could not create output sam file");
-            let mut bam = ReadsReader::from_path(input_reads, reader_threads);
+            let mut bam = ReadsReader::from_path(input_reads, reader_threads, "bam");
             let mut record = bam::Record::new();
             for type_ in receiver {
                 match bam.read_into(&mut record) {
@@ -142,7 +148,7 @@ fn main() {
 
 fn check_header_validity(header: &bam::Header, args: &Args) {
     if header.lines().count() == 0 {
-        if args.bam.ends_with(".bam") {
+        if args.format == "bam" || args.bam.to_ascii_lowercase().ends_with(".bam") {
             eprintln!("The header of the bam file is empty. This is likely due to an invalid bam file.");
         } else {
             eprintln!("The header of the sam file is empty. This is likely due to an invalid sam file. (If you used samtools to convert a bam file to a sam file, make sure to use the -h option to include the header in the output file.)");
@@ -158,21 +164,26 @@ enum ReadsReader {
 
 impl ReadsReader {
 
-    fn from_path(path: String, n: u16) -> ReadsReader {
-        if path.ends_with(".bam") {
+    fn from_path(path: String, n: u16, format_hint: &str) -> ReadsReader {
+        let lower = path.to_ascii_lowercase();
+        let use_bam = match format_hint {
+            "bam" => true,
+            "sam" => false,
+            _ => lower.ends_with(".bam"),
+        };
+
+        if use_bam {
             let reader = BamReader::from_path(path.clone(), n);
             match reader {
                 Ok(reader) => ReadsReader::BamReader(reader),
                 Err(e) => panic!("{}, File: {}", e, path),
             }
-        } else if path.ends_with(".sam") {
+        } else {
             let reader = SamReader::from_path(path.clone());
             match reader {
                 Ok(reader) => ReadsReader::SamReader(reader),
                 Err(e) => panic!("{}, File: {}", e, path),
             }
-        } else {
-            panic!("File type not supported");
         }
     }
 
@@ -229,19 +240,39 @@ impl FeatureType {
 }
 
 // Parse command line arguments with clap's derive API
-#[derive(Parser)]
+#[derive(Parser, Clone)]
+#[command(
+    version,
+    about = "Count reads in genomic features with HTSeq-compatible semantics"
+)]
 struct Args {
-    // Number of threads
+    // Number of parallel input files, matching HTSeq's -n option.
     #[arg(
         short = 'n',
+        long = "nprocesses",
+        default_value = "1",
+        help = "Number of alignment files to process in parallel (default: 1)"
+    )]
+    nprocesses: usize,
+
+    #[arg(
         long = "threads",
         default_value = "4",
-        help = "Number of threads"
+        help = "BAM/CRAM decompression threads per input file (Rust extension; default: 4)"
     )]
-    n: u16,
+    threads: u16,
+
+    #[arg(
+        short = 'f',
+        long = "format",
+        default_value = "auto",
+        value_parser = ["sam", "bam", "auto"],
+        help = "Input alignment format: sam, bam, or auto. Kept for HTSeq CLI compatibility; auto detection is used for CRAM/stdin."
+    )]
+    format: String,
 
     // Mode
-    #[arg(short = 'm', long = "mode", default_value = "union", value_parser = ["intersection-strict", "intersection-nonempty", "union"], help = "Mode to use for counting reads overlapping features. Possible values: intersection-strict, intersection-nonempty, union (default: intersection-strict).")]
+    #[arg(short = 'm', long = "mode", default_value = "union", value_parser = ["intersection-strict", "intersection-nonempty", "union"], help = "Mode to use for counting reads overlapping features. Possible values: intersection-strict, intersection-nonempty, union (default: union).")]
     _m: String,
 
     // Stranded
@@ -355,7 +386,6 @@ struct Args {
 
     // Export feature map
     #[arg(
-        short = 'f',
         long = "export-feature-tree",
         visible_alias = "export_feature_map",
         value_name = "DOT",
@@ -529,9 +559,17 @@ fn read_gtf(
     let parse_started = Instant::now();
     let mut map: HashMap<i32, Vec<Interval>> = HashMap::new();
     let file = File::open(file_path).expect("Could not open this file");
+    // HTSeq accepts gzip-compressed GTF/GFF transparently.
+    let stream: Box<dyn IoRead> = if file_path.to_ascii_lowercase().ends_with(".gz")
+        || file_path.to_ascii_lowercase().ends_with(".gzip")
+    {
+        Box::new(MultiGzDecoder::new(file))
+    } else {
+        Box::new(file)
+    };
     // GTF/GFF files are large sequential text streams. A larger buffer reduces
     // read syscalls, while reusing a preallocated line avoids early growth.
-    let mut reader = BufReader::with_capacity(1024 * 1024, file);
+    let mut reader = BufReader::with_capacity(1024 * 1024, stream);
     let mut counter = 0;
     let mut line: Vec<u8> = Vec::with_capacity(512);
 
