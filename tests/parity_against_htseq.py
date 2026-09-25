@@ -495,6 +495,12 @@ def main():
             rr = run([rust] + op + [str(sf), str(gtf)], root)
             hr = run([htseq] + op + [str(sf), str(gtf)], root)
 
+            if hr.returncode and name.startswith(("fuzz_", "paired_fuzz_")):
+                print(f"[REF-ERROR] {name}: HTSeq exited {hr.returncode}; randomized case skipped")
+                if hr.stderr.strip():
+                    print("  htseq stderr:", hr.stderr.strip().replace("\n", " | "))
+                continue
+
             if rr.returncode or hr.returncode:
                 different += 1
                 print(f"[DIFF] {name}: exit rust={rr.returncode}, htseq={hr.returncode}")
