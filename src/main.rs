@@ -1,6 +1,6 @@
 use ahash::AHashMap as HashMap;
 use bam::record::tags::TagValue;
-use bam::{RecordReader,BamReader, RecordWriter, SamReader, SamWriter};
+use bam::{RecordReader, BamReader, BamWriter, RecordWriter, SamReader, SamWriter};
 use feature::Feature;
 use intervaltree::IntervalTree;
 use interval::Interval;
@@ -501,23 +501,23 @@ fn write_annotated_samout(
     threads: u16,
     assignments: &AssignmentStore,
 ) {
-    let output_is_bam = format.eq_ignore_ascii_case("bam");
-    let temporary = if output_is_bam {
-        Some(tempfile::NamedTempFile::new().expect("Could not create temporary SAM output"))
-    } else {
-        None
-    };
-    let sam_path = temporary
-        .as_ref()
-        .map(|temp| temp.path().to_path_buf())
-        .unwrap_or_else(|| std::path::PathBuf::from(output_path));
-
     let mut reader = ReadsReader::from_path(input_path.to_string(), threads, "auto");
     let header = reader.header().clone();
-    let mut writer = SamWriter::from_path(sam_path.to_string_lossy().to_string(), header)
-        .expect("Could not create annotated SAM output");
-    let mut record = bam::Record::new();
+    let output_is_bam = format.eq_ignore_ascii_case("bam");
 
+    let mut writer: Box<dyn RecordWriter> = if output_is_bam {
+        Box::new(
+            BamWriter::from_path(output_path, header)
+                .expect("Could not create annotated BAM output"),
+        )
+    } else {
+        Box::new(
+            SamWriter::from_path(output_path.to_string(), header)
+                .expect("Could not create annotated SAM output"),
+        )
+    };
+
+    let mut record = bam::Record::new();
     loop {
         match reader.read_into(&mut record) {
             Ok(true) => {}
@@ -536,17 +536,7 @@ fn write_annotated_samout(
         }
         writer.write(&record).unwrap();
     }
-    drop(writer);
-
-    if output_is_bam {
-        input::convert_alignment_output(
-            &sam_path,
-            std::path::Path::new(output_path),
-            "bam",
-            threads,
-        )
-        .unwrap_or_else(|e| panic!("{}", e));
-    }
+    writer.finish().expect("Could not finish annotated alignment output");
 }
 
 // Parse command line arguments with clap's derive API
