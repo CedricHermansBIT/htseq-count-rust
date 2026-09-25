@@ -130,7 +130,7 @@ if __name__ == "__main__":
         ]
 
     ap = argparse.ArgumentParser()
-    ap.add_argument("--rust-bin", default="target/release/htseq_count_rust")
+    ap.add_argument("--rust-bin", default="target/release/tallyseq")
     ap.add_argument("--htseq-bin", default="htseq-count")
     args = ap.parse_args()
 
