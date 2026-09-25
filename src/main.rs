@@ -72,7 +72,7 @@ fn main() {
 
     // Read and index the annotation.
     let annotation_started = Instant::now();
-    let gtf = read_gtf(&args.gtf, &args.t, &ref_names_to_id, &args);
+    let (gtf, feature_names) = read_gtf(&args.gtf, &args.t, &ref_names_to_id, &args);
     if std::env::var_os("HTSEQ_COUNT_RUST_TIMINGS").is_some() {
         eprintln!(
             "__timing_annotation_total_seconds\t{:.6}",
@@ -102,7 +102,7 @@ fn main() {
     // exit(1) to prevent the rest of the program from running for debugging purposes
     //std::process::exit(1);
 
-    let mut counts = prepare_count_hashmap(&gtf);
+    let mut counts = Counts::new(feature_names);
     //let mut read_to_feature: Vec<FeatureType> = Vec::new();
     let mut counter = 0;
 
@@ -365,25 +365,42 @@ struct Args {
     output_sam: Option<String>,
 }
 
-fn prepare_count_hashmap(gtf: &Vec<Option<IntervalTree>>) -> HashMap<String, f64> {
-    let mut counts: HashMap<String, f64> = HashMap::with_capacity(gtf.len());
-    // add all features to the map
-    for tree in gtf {
-        if tree.is_none() {
-            continue;
-        }
-        for feature in tree.as_ref().unwrap().all_intervals.iter() {
-            counts.entry(feature.data.as_ref().unwrap().name().to_string()).or_insert(0.0);
+struct Counts {
+    feature_names: Vec<String>,
+    feature_counts: Vec<f64>,
+    no_feature: f64,
+    ambiguous: f64,
+    not_aligned: f64,
+    too_low_aqual: f64,
+    alignment_not_unique: f64,
+}
+
+impl Counts {
+    fn new(feature_names: Vec<String>) -> Self {
+        let feature_counts = vec![0.0; feature_names.len()];
+        Counts {
+            feature_names,
+            feature_counts,
+            no_feature: 0.0,
+            ambiguous: 0.0,
+            not_aligned: 0.0,
+            too_low_aqual: 0.0,
+            alignment_not_unique: 0.0,
         }
     }
 
-    // Add the special keys
-    counts.insert("__no_feature".to_string(), 0f64);
-    counts.insert("__ambiguous".to_string(), 0f64);
-    counts.insert("__not_aligned".to_string(), 0f64);
-    counts.insert("__too_low_aQual".to_string(), 0f64);
-    counts.insert("__alignment_not_unique".to_string(), 0f64);
-    counts
+    #[inline]
+    fn add_feature(&mut self, feature_id: usize, value: f64) {
+        self.feature_counts[feature_id] += value;
+    }
+
+    fn special_total(&self) -> f64 {
+        self.no_feature
+            + self.ambiguous
+            + self.not_aligned
+            + self.too_low_aqual
+            + self.alignment_not_unique
+    }
 }
 
 fn parse_feature_id(raw: &str, id_attributes: &[String], line_number: usize) -> String {
@@ -452,7 +469,12 @@ fn parse_feature_id(raw: &str, id_attributes: &[String], line_number: usize) -> 
     joined
 }
 
-fn read_gtf(file_path: &str, feature_type_filter: &[String], ref_names_to_id: &HashMap<String, i32>, args: &Args) -> Vec<Option<IntervalTree>> {
+fn read_gtf(
+    file_path: &str,
+    feature_type_filter: &[String],
+    ref_names_to_id: &HashMap<String, i32>,
+    args: &Args,
+) -> (Vec<Option<IntervalTree>>, Vec<String>) {
     let profile_timings = std::env::var_os("HTSEQ_COUNT_RUST_TIMINGS").is_some();
     let parse_started = Instant::now();
     let mut map: HashMap<i32, Vec<Interval>> = HashMap::new();
@@ -466,6 +488,7 @@ fn read_gtf(file_path: &str, feature_type_filter: &[String], ref_names_to_id: &H
     let mut chromosome_ids = ref_names_to_id.clone();
     let mut next_chr_id = chromosome_ids.len() as i32;
     let mut feature_ids: HashMap<String, usize> = HashMap::new();
+    let mut feature_names: Vec<String> = Vec::new();
 
     while reader.read_line(&mut line).unwrap() > 0 {
         counter += 1;
@@ -539,8 +562,9 @@ fn read_gtf(file_path: &str, feature_type_filter: &[String], ref_names_to_id: &H
         let feature_id = if let Some(id) = feature_ids.get(name.as_str()) {
             *id
         } else {
-            let id = feature_ids.len();
+            let id = feature_names.len();
             feature_ids.insert(name.clone(), id);
+            feature_names.push(name.clone());
             id
         };
 
@@ -584,18 +608,18 @@ fn read_gtf(file_path: &str, feature_type_filter: &[String], ref_names_to_id: &H
             index_started.elapsed().as_secs_f64()
         );
     }
-    result
+    (result, feature_names)
 }
 
 fn should_skip_record(
     record: &bam::Record,
-    counts: &mut HashMap<String, f64>,
+    counts: &mut Counts,
     args: &Args,
     sender: Option<&mpsc::Sender<FeatureType>>,
 ) -> bool {
     if !record.flag().is_mapped() || record.ref_id() < 0 {
         if let Some(sender) = sender { let _ = sender.send(FeatureType::NotAligned); }
-        *counts.get_mut("__not_aligned").unwrap() += 1.0;
+        counts.not_aligned += 1.0;
         return true;
     }
 
@@ -611,7 +635,7 @@ fn should_skip_record(
 
     if let Some(TagValue::Int(i, _)) = record.tags().get(b"NH") {
         if i > 1 {
-            *counts.get_mut("__alignment_not_unique").unwrap() += 1.0;
+            counts.alignment_not_unique += 1.0;
             if args.nonunique == "none" {
                 if let Some(sender) = sender { let _ = sender.send(FeatureType::AlignmentNotUnique); }
                 return true;
@@ -621,71 +645,96 @@ fn should_skip_record(
 
     if record.mapq() < args.a {
         if let Some(sender) = sender { let _ = sender.send(FeatureType::TooLowaQual); }
-        *counts.get_mut("__too_low_aQual").unwrap() += 1.0;
+        counts.too_low_aqual += 1.0;
         return true;
     }
 
     false
 }
 
-fn print_output(counts: HashMap<String, f64>, args: Args, counter: i32) {
-    // Print de HashMap
-    let mut sorted_keys: Vec<_> = counts.keys().collect();
-    // Sort the keys case-insensitively
-    sorted_keys.sort();
-    for key in sorted_keys {
-        if key.starts_with("__") {
-            continue;
-        }
-        println!("{}{}{}", key, args.delimiter, counts[key]);
-    }
-    println!("__no_feature{}{}", args.delimiter, counts["__no_feature"]);
-    println!("__ambiguous{}{}", args.delimiter, counts["__ambiguous"]);
-    println!("__too_low_aQual{}{}",args.delimiter, counts["__too_low_aQual"]);
-    println!("__not_aligned{}{}", args.delimiter, counts["__not_aligned"]);
-    println!("__alignment_not_unique{}{}",args.delimiter, counts["__alignment_not_unique"]);
+fn sorted_feature_indices(counts: &Counts) -> Vec<usize> {
+    let mut indices: Vec<usize> = (0..counts.feature_names.len()).collect();
+    indices.sort_unstable_by(|a, b| {
+        counts.feature_names[*a].cmp(&counts.feature_names[*b])
+    });
+    indices
+}
 
-    // TODO: check the correctness, since it might depend on nonunique mode
+fn print_output(counts: Counts, args: Args, counter: i32) {
+    for feature_id in sorted_feature_indices(&counts) {
+        println!(
+            "{}{}{}",
+            counts.feature_names[feature_id],
+            args.delimiter,
+            counts.feature_counts[feature_id]
+        );
+    }
+
+    println!("__no_feature{}{}", args.delimiter, counts.no_feature);
+    println!("__ambiguous{}{}", args.delimiter, counts.ambiguous);
+    println!("__too_low_aQual{}{}", args.delimiter, counts.too_low_aqual);
+    println!("__not_aligned{}{}", args.delimiter, counts.not_aligned);
+    println!(
+        "__alignment_not_unique{}{}",
+        args.delimiter,
+        counts.alignment_not_unique
+    );
+
     if args.counts {
         println!(
             "Total number of uniquely mapped reads{}{}",
             args.delimiter,
-            counter as f64
-                - counts["__not_aligned"]
-                - counts["__too_low_aQual"]
-                - counts["__alignment_not_unique"]
-                - counts["__ambiguous"]
-                - counts["__no_feature"]
+            counter as f64 - counts.special_total()
         );
     }
 }
 
-fn write_counts(counts: HashMap<String, f64>, args: Args, counter: i32) {
-    let mut sorted_keys: Vec<_> = counts.keys().collect();
-    // Sort the keys case-insensitively
-    sorted_keys.sort();
-    let mut file = File::create(args.counts_output.unwrap()).expect("Unable to create file");
-    for key in sorted_keys {
-        if key.starts_with("__") {
-            continue;
-        }
-        file.write_all(format!("{}{}{}\n", key, args.delimiter, counts[key]).as_bytes()).expect("Unable to write data");
+fn write_counts(counts: Counts, args: Args, counter: i32) {
+    let mut file = File::create(args.counts_output.unwrap())
+        .expect("Unable to create file");
+
+    for feature_id in sorted_feature_indices(&counts) {
+        writeln!(
+            file,
+            "{}{}{}",
+            counts.feature_names[feature_id],
+            args.delimiter,
+            counts.feature_counts[feature_id]
+        )
+        .expect("Unable to write data");
     }
-    file.write_all(format!("__no_feature{}{}\n", args.delimiter, counts["__no_feature"]).as_bytes(),).expect("Unable to write data");
-    file.write_all(format!("__ambiguous{}{}\n", args.delimiter, counts["__ambiguous"]).as_bytes()).expect("Unable to write data");
-    file.write_all(format!("__too_low_aQual{}{}\n",args.delimiter, counts["__too_low_aQual"]).as_bytes(),).expect("Unable to write data");
-    file.write_all(format!("__not_aligned{}{}\n",args.delimiter, counts["__not_aligned"]).as_bytes(),).expect("Unable to write data");
-    file.write_all(format!("__alignment_not_unique{}{}\n",args.delimiter, counts["__alignment_not_unique"]).as_bytes(),).expect("Unable to write data");
+
+    writeln!(file, "__no_feature{}{}", args.delimiter, counts.no_feature)
+        .expect("Unable to write data");
+    writeln!(file, "__ambiguous{}{}", args.delimiter, counts.ambiguous)
+        .expect("Unable to write data");
+    writeln!(
+        file,
+        "__too_low_aQual{}{}",
+        args.delimiter,
+        counts.too_low_aqual
+    )
+    .expect("Unable to write data");
+    writeln!(file, "__not_aligned{}{}", args.delimiter, counts.not_aligned)
+        .expect("Unable to write data");
+    writeln!(
+        file,
+        "__alignment_not_unique{}{}",
+        args.delimiter,
+        counts.alignment_not_unique
+    )
+    .expect("Unable to write data");
 
     if args.counts {
-        file.write_all(format!("Total number of uniquely mapped reads{}{}\n",args.delimiter,
-            counter as f64 - counts["__not_aligned"] - counts["__too_low_aQual"] - counts["__alignment_not_unique"] - counts["__ambiguous"] - counts["__no_feature"])
-            .as_bytes(),
+        writeln!(
+            file,
+            "Total number of uniquely mapped reads{}{}",
+            args.delimiter,
+            counter as f64 - counts.special_total()
         )
         .expect("Unable to write data");
     }
 }
-
 
 fn add_record_blocks<'a>(
     record: &bam::Record,
@@ -757,7 +806,7 @@ fn add_record_blocks<'a>(
 
 fn assign_overlaps(
     overlapping_features: &[Vec<&Feature>],
-    counts: &mut HashMap<String, f64>,
+    counts: &mut Counts,
     args: &Args,
     sender: Option<&mpsc::Sender<FeatureType>>,
 ) {
@@ -773,36 +822,36 @@ fn assign_overlaps(
 
     match feature_count {
         0 => {
-            *counts.get_mut("__no_feature").unwrap() += 1.0;
+            counts.no_feature += 1.0;
             if let Some(sender) = sender {
                 let _ = sender.send(FeatureType::NoFeature);
             }
         }
         1 => {
             let feature = unique_features[0];
-            *counts.get_mut(feature.name()).unwrap() += 1.0;
+            counts.add_feature(feature.id(), 1.0);
             if let Some(sender) = sender {
                 let _ = sender.send(FeatureType::Name(feature.name().to_string()));
             }
         }
         _ => {
-            *counts.get_mut("__ambiguous").unwrap() += 1.0;
+            counts.ambiguous += 1.0;
             match args.nonunique.as_str() {
                 "all" => {
                     for feature in &unique_features {
-                        *counts.get_mut(feature.name()).unwrap() += 1.0;
+                        counts.add_feature(feature.id(), 1.0);
                     }
                 }
                 "fraction" => {
                     let fractional_count = 1.0 / feature_count as f64;
                     for feature in &unique_features {
-                        *counts.get_mut(feature.name()).unwrap() += fractional_count;
+                        counts.add_feature(feature.id(), fractional_count);
                     }
                 }
                 "random" => {
                     let random_index = rand::random_range(0..feature_count);
                     let feature = unique_features[random_index];
-                    *counts.get_mut(feature.name()).unwrap() += 1.0;
+                    counts.add_feature(feature.id(), 1.0);
                 }
                 _ => {}
             }
@@ -822,7 +871,7 @@ fn assign_overlaps(
 fn count_single_record(
     record: &bam::Record,
     counter: &mut i32,
-    counts: &mut HashMap<String, f64>,
+    counts: &mut Counts,
     args: &Args,
     gtf: &[Option<IntervalTree>],
     sender: Option<&mpsc::Sender<FeatureType>>,
@@ -838,7 +887,7 @@ fn count_single_record(
 
     let mut overlapping_features = Vec::with_capacity(3);
     if !add_record_blocks(record, false, gtf, &mut overlapping_features, args) {
-        *counts.get_mut("__no_feature").unwrap() += 1.0;
+        counts.no_feature += 1.0;
         if let Some(sender) = sender { let _ = sender.send(FeatureType::NoFeature); }
         return;
     }
@@ -896,7 +945,7 @@ fn pair_is_multimapped_htseq_compatible(
 fn should_skip_pair(
     first: Option<&bam::Record>,
     second: Option<&bam::Record>,
-    counts: &mut HashMap<String, f64>,
+    counts: &mut Counts,
     args: &Args,
     sender: Option<&mpsc::Sender<FeatureType>>,
 ) -> bool {
@@ -904,7 +953,7 @@ fn should_skip_pair(
     let second_mapped = second.map(|r| r.flag().is_mapped()).unwrap_or(false);
 
     if !first_mapped && !second_mapped {
-        *counts.get_mut("__not_aligned").unwrap() += 1.0;
+        counts.not_aligned += 1.0;
         if let Some(sender) = sender { let _ = sender.send(FeatureType::NotAligned); }
         return true;
     }
@@ -939,7 +988,7 @@ fn should_skip_pair(
     let low_quality = first.map(|r| r.mapq() < args.a).unwrap_or(false)
         || second.map(|r| r.mapq() < args.a).unwrap_or(false);
     if low_quality {
-        *counts.get_mut("__too_low_aQual").unwrap() += 1.0;
+        counts.too_low_aqual += 1.0;
         if let Some(sender) = sender { let _ = sender.send(FeatureType::TooLowaQual); }
         return true;
     }
@@ -951,7 +1000,7 @@ fn count_pair(
     first: Option<&bam::Record>,
     second: Option<&bam::Record>,
     counter: &mut i32,
-    counts: &mut HashMap<String, f64>,
+    counts: &mut Counts,
     args: &Args,
     gtf: &[Option<IntervalTree>],
     sender: Option<&mpsc::Sender<FeatureType>>,
@@ -990,7 +1039,7 @@ fn count_pair(
     }
 
     if !all_chromosomes_known {
-        *counts.get_mut("__no_feature").unwrap() += 1.0;
+        counts.no_feature += 1.0;
         if let Some(sender) = sender { let _ = sender.send(FeatureType::NoFeature); }
         return;
     }
@@ -1025,7 +1074,7 @@ fn records_are_mates_name_sorted(first: &bam::Record, second: &bam::Record) -> b
 fn process_name_group(
     mut group: VecDeque<bam::Record>,
     counter: &mut i32,
-    counts: &mut HashMap<String, f64>,
+    counts: &mut Counts,
     args: &Args,
     gtf: &[Option<IntervalTree>],
     sender: Option<&mpsc::Sender<FeatureType>>,
@@ -1064,7 +1113,7 @@ fn count_paired_name_sorted(
     reads_reader: &mut ReadsReader,
     first_record: bam::Record,
     counter: &mut i32,
-    counts: &mut HashMap<String, f64>,
+    counts: &mut Counts,
     args: &Args,
     gtf: &[Option<IntervalTree>],
     sender: Option<&mpsc::Sender<FeatureType>>,
@@ -1142,7 +1191,7 @@ fn count_paired_position_sorted(
     reads_reader: &mut ReadsReader,
     first_record: bam::Record,
     counter: &mut i32,
-    counts: &mut HashMap<String, f64>,
+    counts: &mut Counts,
     args: &Args,
     gtf: &[Option<IntervalTree>],
     sender: Option<&mpsc::Sender<FeatureType>>,
@@ -1242,7 +1291,7 @@ fn count_paired_position_sorted(
 fn count_reads(
     reads_reader: &mut ReadsReader,
     counter: &mut i32,
-    counts: &mut HashMap<String, f64>,
+    counts: &mut Counts,
     args: &Args,
     gtf: Vec<Option<IntervalTree>>,
     sender: Option<&mpsc::Sender<FeatureType>>,
