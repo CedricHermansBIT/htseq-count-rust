@@ -141,7 +141,7 @@ The compatibility suite covers:
 
 Core counting differential coverage includes CIGAR `M`, `=`, `X`, insertions, deletions, skipped regions and clipping; all overlap and strandedness modes; MAPQ/NH behavior; secondary/supplementary alignments; repeated feature types and ID attributes; and both paired-end ordering modes.
 
-One unusual behavior is deliberately retained for HTSeq 2.1.2 parity: if paired mate 1 exists but lacks an `NH` tag, current HTSeq does not inspect an `NH` tag present only on mate 2. The Rust implementation mirrors that behavior.
+One unusual behavior is deliberately retained for HTSeq 2.1.2 parity: if paired mate 1 exists but lacks an `NH` tag, HTSeq 2.1.2 does not inspect an `NH` tag present only on mate 2. TallySeq mirrors that behavior.
 
 ## Dependencies and reproducible builds
 
@@ -157,7 +157,7 @@ The Graphviz feature-tree export is disabled by default and is not part of norma
 tallyseq --export-feature-tree feature_tree.dot reads.bam genes.gtf
 ```
 
-The older `--export_feature_map` spelling remains as an alias. There is intentionally no `-f` short form because `-f` belongs to HTSeq's deprecated `--format` option.
+`--export_feature_map` is retained as an alias. There is intentionally no `-f` short form because `-f` belongs to HTSeq's deprecated `--format` option.
 
 ## Real-data benchmark
 
@@ -168,13 +168,15 @@ Every benchmark scenario first requires exact count parity with HTSeq. A differi
 The `full` profile covers single-end and paired-end data, all three overlap modes, all three strandedness modes, multimapper options, MAPQ thresholds, secondary/supplementary scoring, repeated feature types/IDs, and both paired input orderings.
 
 ```bash
-python -m pip install HTSeq
+python -m pip install "HTSeq==2.1.2"
 python benchmarks/benchmark_real_data.py \
   --build \
   --profile full \
+  --dataset GSM461177 \
+  --dataset GSM461178 \
   --rust-threads 1 \
   --nprocesses 1 \
-  --repeats 3
+  --repeats 5
 ```
 
 Downloads are cached under `benchmarks/data`; JSON and Markdown results are written under `benchmarks/results`.
@@ -186,21 +188,33 @@ A second benchmark, `benchmarks/benchmark_scaling.py`, measures scaling with ali
 ```bash
 python benchmarks/benchmark_scaling.py \
   --build \
+  --dataset GSM461177 \
   --rust-threads 1 \
   --nprocesses 1 \
-  --repeats 3
+  --repeats 5 \
+  --records 100000 \
+  --records 1000000 \
+  --records 5000000 \
+  --records 10000000
 ```
 
 The scaling report includes median wall time, peak RSS, the HTSeq/TallySeq runtime ratio at every target, and a linear fit of runtime against millions of alignment records.
 
 ## Performance
 
-An older benchmark used SRR5724993 aligned to GRCh38 with a GTF containing 1,065,949 genes and 58,663,336 alignment records:
+The release benchmark uses HTSeq 2.1.2 and TallySeq 0.1.0 with TallySeq `--threads 1` and both tools `-n 1`. Each real-data dataset/scenario combination is measured five times after exact normalized count equality is confirmed. The benchmark covers 31 scenarios on each of two Pasilla chromosome 4 datasets, for 62 dataset/scenario comparisons and 620 timed executions.
 
-| Tool | Time | Peak memory |
-| --- | ---: | ---: |
-| htseq-count | ~40 min | 1749 MB virtual, 150 MB resident |
-| htseq-count-rust with `-o` | 3 min 15 s | 1947 MB virtual, 1351 MB resident |
-| htseq-count-rust without `-o` | 1 min 54 s | 467 MB virtual, 135 MB resident |
+Across those comparisons, the median of the per-comparison median runtimes is 0.58 s for TallySeq and 14.59 s for HTSeq. The median pairwise runtime ratio is 26.1x, with a range of 18.7x to 29.1x. Median peak RSS is 28.1 MiB for TallySeq and 73.8 MiB for HTSeq.
 
-These figures predate the current parity and paired-end work and should be rerun before using them as a current benchmark.
+The controlled read-count scaling benchmark keeps the real Pasilla alignment distribution fixed while cycling records to exact target sizes:
+
+| Alignments | TallySeq median | HTSeq median | HTSeq/TallySeq | TallySeq RSS | HTSeq RSS |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 100,000 | 0.53 s | 14.65 s | 27.6x | 25.8 MiB | 67.6 MiB |
+| 1,000,000 | 1.29 s | 28.25 s | 21.9x | 25.8 MiB | 67.6 MiB |
+| 5,000,000 | 5.27 s | 100.50 s | 19.1x | 25.9 MiB | 67.7 MiB |
+| 10,000,000 | 10.02 s | 221.74 s | 22.1x | 25.8 MiB | 67.5 MiB |
+
+Linear fits give 0.964 s per million alignments for TallySeq (R² = 0.9998) and 20.911 s per million for HTSeq (R² = 0.9931). All reported scaling runs passed exact normalized count equality.
+
+The benchmark environment and toolchain are recorded in the generated JSON and manuscript provenance files, including CPU, logical CPU count, RAM, kernel/platform, Python, Rust/Cargo, Git commit, filesystem, thread/process settings, and execution order.
