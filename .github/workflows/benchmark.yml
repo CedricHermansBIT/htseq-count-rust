@@ -7,6 +7,7 @@ on:
       - diagnostics
     paths:
       - "benchmarks/benchmark_real_data.py"
+      - "benchmarks/benchmark_scaling.py"
       - ".github/workflows/benchmark.yml"
   workflow_dispatch:
     inputs:
@@ -27,6 +28,19 @@ on:
         required: false
         type: boolean
         default: false
+      rust_threads:
+        description: "TallySeq BAM decoding threads"
+        required: false
+        default: "1"
+      run_scaling:
+        description: "Also run the 100k/1M/5M/10M scaling benchmark"
+        required: false
+        type: boolean
+        default: false
+      scaling_repeats:
+        description: "Measured repeats per scaling target"
+        required: false
+        default: "3"
 
 jobs:
   benchmark:
@@ -41,7 +55,7 @@ jobs:
       - name: Install HTSeq
         run: |
           python -m pip install --upgrade pip
-          python -m pip install HTSeq
+          python -m pip install "HTSeq==2.1.2"
 
       - name: Build Rust release
         run: cargo build --release --locked
@@ -51,9 +65,12 @@ jobs:
         run: |
           REPEATS="${{ github.event_name == 'push' && '1' || inputs.repeats }}"
           PROFILE="${{ github.event_name == 'push' && 'full' || inputs.profile }}"
+          RUST_THREADS="${{ github.event_name == 'push' && '1' || inputs.rust_threads }}"
           python benchmarks/benchmark_real_data.py \
             --rust-bin target/release/tallyseq \
             --profile "$PROFILE" \
+            --rust-threads "$RUST_THREADS" \
+            --nprocesses 1 \
             --repeats "$REPEATS"
 
       - name: Benchmark both real datasets
@@ -64,7 +81,18 @@ jobs:
             --profile "${{ inputs.profile }}" \
             --dataset GSM461177 \
             --dataset GSM461178 \
+            --rust-threads "${{ inputs.rust_threads }}" \
+            --nprocesses 1 \
             --repeats "${{ inputs.repeats }}"
+
+      - name: Run large-BAM scaling benchmark
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_scaling }}
+        run: |
+          python benchmarks/benchmark_scaling.py \
+            --rust-bin target/release/tallyseq \
+            --rust-threads "${{ inputs.rust_threads }}" \
+            --nprocesses 1 \
+            --repeats "${{ inputs.scaling_repeats }}"
 
       - name: Upload benchmark report
         uses: actions/upload-artifact@v4
@@ -75,3 +103,14 @@ jobs:
             benchmarks/results/real_data_benchmark.md
             benchmarks/results/runs/*.time.tsv
             benchmarks/results/runs/*.stderr.txt
+
+      - name: Upload scaling report
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_scaling }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: scaling-benchmark
+          path: |
+            benchmarks/results/scaling_benchmark.json
+            benchmarks/results/scaling_benchmark.md
+            benchmarks/results/scaling_runs/*.time.tsv
+            benchmarks/results/scaling_runs/*.stderr.txt
