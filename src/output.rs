@@ -272,7 +272,7 @@ fn write_categorical_metadata(
 
     let codes_ds = categorical
         .new_dataset::<i32>()
-        .shape(&[codes.len()])
+        .shape([codes.len()])
         .create("codes")
         .map_err(|e| e.to_string())?;
     codes_ds.write_raw(&codes).map_err(|e| e.to_string())?;
@@ -353,7 +353,7 @@ where
 {
     let dataset = group
         .new_dataset::<T>()
-        .shape(&[values.len()])
+        .shape([values.len()])
         .create(name)
         .map_err(|e| e.to_string())?;
     dataset.write_raw(values).map_err(|e| e.to_string())?;
@@ -365,7 +365,7 @@ fn write_h5ad_dense_matrix(file: &H5File, table: &OutputTable) -> Result<(), Str
     let matrix_f32: Vec<f32> = table.values.iter().map(|value| *value as f32).collect();
     let x = file
         .new_dataset::<f32>()
-        .shape(&[table.n_samples(), table.n_features()])
+        .shape([table.n_samples(), table.n_features()])
         .create("X")
         .map_err(|e| e.to_string())?;
     x.write_raw(&matrix_f32).map_err(|e| e.to_string())?;
@@ -448,7 +448,7 @@ fn write_loom(path: &str, table: &OutputTable) -> Result<(), String> {
     }
     let dataset = file
         .new_dataset::<f32>()
-        .shape(&[table.n_features(), table.n_samples()])
+        .shape([table.n_features(), table.n_samples()])
         .create("matrix")
         .map_err(|e| e.to_string())?;
     dataset.write_raw(&matrix).map_err(|e| e.to_string())?;

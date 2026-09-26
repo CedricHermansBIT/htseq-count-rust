@@ -295,8 +295,14 @@ impl Node {
         }
         match point.cmp(&self.x_center) {
             std::cmp::Ordering::Equal => false,
-            std::cmp::Ordering::Less => return self.left_node.as_ref().map_or(false, |n| n.contains_point(point)),
-            std::cmp::Ordering::Greater => return self.right_node.as_ref().map_or(false, |n| n.contains_point(point))
+            std::cmp::Ordering::Less => self
+                .left_node
+                .as_ref()
+                .is_some_and(|node| node.contains_point(point)),
+            std::cmp::Ordering::Greater => self
+                .right_node
+                .as_ref()
+                .is_some_and(|node| node.contains_point(point)),
         }
     }
 
@@ -362,7 +368,7 @@ impl Node {
         if indent==0 {
             f.write_all(format!("digraph {} {{\n", chr).as_bytes()).expect("Unable to write data");
         }
-        let current_data = self.s_center.iter().next().unwrap().data.as_ref().unwrap();
+        let current_data = self.s_center.first().unwrap().data.as_ref().unwrap();
         // write the node
         _ = writeln!(f, "{} [label=\"{}\n{}-{}\nmel: {}, mer: {}\"]", self.x_center,current_data.name(), current_data.start(), current_data.end(), self.max_end_left, self.max_end_right);
         // write the edges if they exist

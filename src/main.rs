@@ -512,7 +512,7 @@ fn write_annotated_samout(
         )
     } else {
         Box::new(
-            SamWriter::from_path(output_path.to_string(), header)
+            SamWriter::from_path(output_path, header)
                 .expect("Could not create annotated SAM output"),
         )
     };
@@ -983,7 +983,7 @@ fn load_annotation(
 
     while reader.read_until(b'\n', &mut line).unwrap() > 0 {
         counter += 1;
-        if !args.quiet && counter % 100000 == 0 {
+        if !args.quiet && counter.is_multiple_of(100000) {
             eprintln!("{} GFF lines processed.", counter);
         }
 

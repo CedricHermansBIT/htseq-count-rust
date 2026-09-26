@@ -114,7 +114,9 @@ impl Interval {
 
     pub fn set_end(&mut self, end: i32) {
         self.end = end;
-        self.data.as_mut().map(|f| f.set_end(end));
+        if let Some(feature) = self.data.as_mut() {
+            feature.set_end(end);
+        }
     }
 
 }
