@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "benchmark": "large_bam_scaling",
+  "dataset": "GSM461177",
+  "zenodo_doi": "10.5281/zenodo.61771",
+  "record_counts": [100000, 1000000, 5000000, 10000000],
+  "benchmark_settings": {
+    "repeats": 5,
+    "tallyseq_threads": 1,
+    "nprocesses": 1,
+    "execution_order": "alternated by repeat to reduce systematic page-cache bias"
+  },
+  "rust_version": "tallyseq 0.1.0",
+  "htseq_version": "2.1.2",
+  "system": {
+    "platform": "Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.41",
+    "kernel": "6.18.33.2-microsoft-standard-WSL2",
+    "machine": "x86_64",
+    "python": "3.13.13",
+    "cpu_count_logical": 12,
+    "cpu_model": "Intel(R) Core(TM) i7-9750H CPU @ 2.60GHz",
+    "memory_total_kib": 16302724,
+    "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+    "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)",
+    "git_commit": "8d0dd196ecb2500cc9d28c85c209310094b049af",
+    "filesystem": "ext4 /dev/sdd /"
+  },
+  "linear_scaling": {
+    "rust": {
+      "intercept_seconds": 0.3960045746027854,
+      "seconds_per_million_records": 0.9643466895396805,
+      "r_squared": 0.9998336462761164
+    },
+    "htseq": {
+      "intercept_seconds": 7.117142098599004,
+      "seconds_per_million_records": 20.91126904382633,
+      "r_squared": 0.9931401868530706
+    }
+  },
+  "exact_count_equality": true
+}
