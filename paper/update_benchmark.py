@@ -23,6 +23,9 @@ def main():
     paper = Path(args.paper_dir)
     paper.mkdir(parents=True, exist_ok=True)
 
+    settings = report.get("benchmark_settings", {})
+    system = report.get("system", {})
+
     rows = []
     scenario_meta = {x["name"]: x for x in report["scenarios"]}
     for dataset in report["datasets"]:
@@ -90,8 +93,18 @@ def main():
     tally_rss = [x["tally_rss"] for x in rows]
     htseq_rss = [x["htseq_rss"] for x in rows]
 
+    repeats = settings.get("repeats", 1)
+    tally_threads = settings.get("tallyseq_threads", "unknown")
+    nprocesses = settings.get("nprocesses", "unknown")
+    total_timed_runs = len(rows) * repeats * 2
+
     macros = f"""\\newcommand{{\\BenchmarkScenarioCount}}{{{len(rows)}}}
 \\newcommand{{\\BenchmarkExactScenarioCount}}{{{len(rows)}}}
+\\newcommand{{\\BenchmarkDatasetCount}}{{{len(report['datasets'])}}}
+\\newcommand{{\\BenchmarkRepeats}}{{{repeats}}}
+\\newcommand{{\\BenchmarkTimedRuns}}{{{total_timed_runs}}}
+\\newcommand{{\\BenchmarkTallyThreads}}{{{tally_threads}}}
+\\newcommand{{\\BenchmarkNProcesses}}{{{nprocesses}}}
 \\newcommand{{\\MedianSpeedup}}{{{statistics.median(speedups):.1f}}}
 \\newcommand{{\\MinimumSpeedup}}{{{min(speedups):.1f}}}
 \\newcommand{{\\MaximumSpeedup}}{{{max(speedups):.1f}}}
@@ -102,6 +115,20 @@ def main():
 \\newcommand{{\\MedianMemoryRatio}}{{{statistics.median(mem_ratios):.2f}}}
 """
     (paper / "benchmark_macros.tex").write_text(macros)
+
+    provenance = {
+        "schema_version": report.get("schema_version"),
+        "datasets": report.get("datasets"),
+        "profile": report.get("profile"),
+        "benchmark_settings": settings,
+        "rust_version": report.get("rust_version"),
+        "htseq_version": report.get("htseq_version"),
+        "system": system,
+        "exact_count_equality": report.get("exact_count_equality"),
+    }
+    (paper / "benchmark_provenance.json").write_text(
+        json.dumps(provenance, indent=2) + "\n"
+    )
     print(f"Wrote {len(rows)} benchmark rows to {paper}")
 
 
