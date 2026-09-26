@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Update the preprint benchmark snapshot from a TallySeq benchmark JSON file."""
+"""Update the manuscript benchmark snapshots from TallySeq benchmark JSON files."""
 
 from __future__ import annotations
 
@@ -9,20 +9,7 @@ import statistics
 from pathlib import Path
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument(
-        "report",
-        nargs="?",
-        default="benchmarks/results/real_data_benchmark.json",
-    )
-    ap.add_argument("--paper-dir", default="paper")
-    args = ap.parse_args()
-
-    report = json.loads(Path(args.report).read_text())
-    paper = Path(args.paper_dir)
-    paper.mkdir(parents=True, exist_ok=True)
-
+def write_real_benchmark(report: dict, paper: Path) -> None:
     settings = report.get("benchmark_settings", {})
     system = report.get("system", {})
 
@@ -45,9 +32,8 @@ def main():
                     "htseq_time": hs["median_wall_seconds"],
                     "htseq_rss": hs["median_max_rss_kib"] / 1024.0,
                     "speedup": summary["htseq_over_rust_time_ratio"],
-                    "memory_ratio": (
-                        hs["median_max_rss_kib"] / rs["median_max_rss_kib"]
-                    ),
+                    "memory_ratio": hs["median_max_rss_kib"]
+                    / rs["median_max_rss_kib"],
                 }
             )
 
@@ -98,9 +84,10 @@ def main():
     nprocesses = settings.get("nprocesses", "unknown")
     total_timed_runs = len(rows) * repeats * 2
 
-    macros = f"""\\newcommand{{\\BenchmarkScenarioCount}}{{{len(rows)}}}
+    macros = f"""\\newcommand{{\\BenchmarkScenarioCount}}{{{len(report["scenarios"])}}}
+\\newcommand{{\\BenchmarkDatasetCount}}{{{len(report["datasets"])}}}
+\\newcommand{{\\BenchmarkDatasetScenarioCount}}{{{len(rows)}}}
 \\newcommand{{\\BenchmarkExactScenarioCount}}{{{len(rows)}}}
-\\newcommand{{\\BenchmarkDatasetCount}}{{{len(report['datasets'])}}}
 \\newcommand{{\\BenchmarkRepeats}}{{{repeats}}}
 \\newcommand{{\\BenchmarkTimedRuns}}{{{total_timed_runs}}}
 \\newcommand{{\\BenchmarkTallyThreads}}{{{tally_threads}}}
@@ -129,7 +116,107 @@ def main():
     (paper / "benchmark_provenance.json").write_text(
         json.dumps(provenance, indent=2) + "\n"
     )
-    print(f"Wrote {len(rows)} benchmark rows to {paper}")
+    print(f"Wrote {len(rows)} real-data benchmark rows to {paper}")
+
+
+def write_scaling_benchmark(report: dict, paper: Path) -> None:
+    settings = report.get("benchmark_settings", {})
+    summaries = report["summaries"]
+    linear = report["linear_scaling"]
+
+    header = [
+        "records",
+        "BAM_MiB",
+        "TallySeq_seconds",
+        "TallySeq_peak_RSS_MiB",
+        "HTSeq_seconds",
+        "HTSeq_peak_RSS_MiB",
+        "speedup",
+    ]
+    with (paper / "scaling_snapshot.tsv").open("w") as out:
+        out.write("\t".join(header) + "\n")
+        for records in report["record_counts"]:
+            summary = summaries[str(records)]
+            rust = summary["rust"]
+            htseq = summary["htseq"]
+            bam_mib = report["scaled_inputs"][str(records)]["bytes"] / (1024**2)
+            out.write(
+                "\t".join(
+                    [
+                        str(records),
+                        f"{bam_mib:.2f}",
+                        f'{rust["median_wall_seconds"]:.4f}',
+                        f'{rust["median_max_rss_kib"] / 1024.0:.2f}',
+                        f'{htseq["median_wall_seconds"]:.4f}',
+                        f'{htseq["median_max_rss_kib"] / 1024.0:.2f}',
+                        f'{summary["htseq_over_rust_time_ratio"]:.4f}',
+                    ]
+                )
+                + "\n"
+            )
+
+    largest = str(max(report["record_counts"]))
+    largest_summary = summaries[largest]
+    rust_fit = linear["rust"]
+    htseq_fit = linear["htseq"]
+    macros = f"""\\newcommand{{\\ScalingRepeats}}{{{settings.get("repeats", 1)}}}
+\\newcommand{{\\ScalingMaxRecords}}{{{largest}}}
+\\newcommand{{\\ScalingTallyTenMTime}}{{{largest_summary["rust"]["median_wall_seconds"]:.2f}}}
+\\newcommand{{\\ScalingHTSeqTenMTime}}{{{largest_summary["htseq"]["median_wall_seconds"]:.2f}}}
+\\newcommand{{\\ScalingTenMSpeedup}}{{{largest_summary["htseq_over_rust_time_ratio"]:.1f}}}
+\\newcommand{{\\ScalingTallySlope}}{{{rust_fit["seconds_per_million_records"]:.3f}}}
+\\newcommand{{\\ScalingHTSeqSlope}}{{{htseq_fit["seconds_per_million_records"]:.3f}}}
+\\newcommand{{\\ScalingTallyIntercept}}{{{rust_fit["intercept_seconds"]:.3f}}}
+\\newcommand{{\\ScalingHTSeqIntercept}}{{{htseq_fit["intercept_seconds"]:.3f}}}
+\\newcommand{{\\ScalingTallyRSquared}}{{{rust_fit["r_squared"]:.4f}}}
+\\newcommand{{\\ScalingHTSeqRSquared}}{{{htseq_fit["r_squared"]:.4f}}}
+"""
+    (paper / "scaling_macros.tex").write_text(macros)
+
+    provenance = {
+        "schema_version": report.get("schema_version"),
+        "benchmark": report.get("benchmark"),
+        "dataset": report.get("dataset"),
+        "zenodo_doi": report.get("zenodo_doi"),
+        "record_counts": report.get("record_counts"),
+        "benchmark_settings": settings,
+        "rust_version": report.get("rust_version"),
+        "htseq_version": report.get("htseq_version"),
+        "system": report.get("system"),
+        "linear_scaling": report.get("linear_scaling"),
+        "exact_count_equality": report.get("exact_count_equality"),
+    }
+    (paper / "scaling_provenance.json").write_text(
+        json.dumps(provenance, indent=2) + "\n"
+    )
+    print(f"Wrote {len(report['record_counts'])} scaling rows to {paper}")
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument(
+        "report",
+        nargs="?",
+        default="benchmarks/results/real_data_benchmark.json",
+        help="Real-data benchmark JSON.",
+    )
+    ap.add_argument(
+        "--scaling-report",
+        default=None,
+        help="Optional scaling benchmark JSON.",
+    )
+    ap.add_argument("--paper-dir", default="paper")
+    args = ap.parse_args()
+
+    paper = Path(args.paper_dir)
+    paper.mkdir(parents=True, exist_ok=True)
+
+    report = json.loads(Path(args.report).read_text())
+    write_real_benchmark(report, paper)
+
+    if args.scaling_report:
+        scaling = json.loads(Path(args.scaling_report).read_text())
+        write_scaling_benchmark(scaling, paper)
 
 
 if __name__ == "__main__":
