@@ -8,6 +8,8 @@
 \usepackage{hyperref}
 \usepackage{natbib}
 \usepackage{xcolor}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
 
 \hypersetup{colorlinks=true,linkcolor=black,citecolor=black,urlcolor=blue}
 \input{benchmark_macros.tex}
@@ -130,7 +132,42 @@ Records & BAM (MiB) & \multicolumn{2}{c}{Time (s)} & Speed ratio & \multicolumn{
 \end{tabular}
 \end{table}
 
-The fitted TallySeq runtime was \ScalingTallyIntercept{} + \ScalingTallySlope{} seconds per million alignments ($R^2=\ScalingTallyRSquared$). The HTSeq fit was \ScalingHTSeqIntercept{} + \ScalingHTSeqSlope{} seconds per million alignments ($R^2=\ScalingHTSeqRSquared$). The fitted per-million-record slope was therefore about 21.7 times larger for HTSeq. Peak resident memory remained nearly constant across the four record counts for both tools.
+Writing runtime as $t = a + bN$, where $N$ is the number of alignments in millions, the TallySeq fit gave $a=\ScalingTallyIntercept{}$~s and $b=\ScalingTallySlope{}$~s per million alignments ($R^2=\ScalingTallyRSquared$). The HTSeq fit gave $a=\ScalingHTSeqIntercept{}$~s and $b=\ScalingHTSeqSlope{}$~s per million alignments ($R^2=\ScalingHTSeqRSquared$). The fitted per-million-record slope was therefore about 21.7 times larger for HTSeq. Peak resident memory remained nearly constant across the four record counts for both tools.
+
+\begin{figure}[ht]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+    width=0.88\linewidth,
+    height=7.0cm,
+    xlabel={Alignments (millions)},
+    ylabel={Median wall time (s)},
+    xmin=0,
+    xmax=10.3,
+    ymin=0,
+    grid=major,
+    legend pos=north west,
+    tick align=outside,
+]
+\addplot+[mark=*] coordinates {
+    (0.1,0.53)
+    (1,1.29)
+    (5,5.27)
+    (10,10.02)
+};
+\addlegendentry{TallySeq}
+\addplot+[mark=square*] coordinates {
+    (0.1,14.65)
+    (1,28.25)
+    (5,100.50)
+    (10,221.74)
+};
+\addlegendentry{HTSeq}
+\end{axis}
+\end{tikzpicture}
+\caption{Controlled read-count scaling. Each point is the median of five runs after exact count equality was confirmed. The input alignment distribution is held constant by deterministic repetition of real Pasilla records.}
+\label{fig:scaling}
+\end{figure}
 
 \section{Discussion}
 
