@@ -2,15 +2,15 @@
 
 TallySeq is a fast Rust implementation of `htseq-count` semantics, designed as a practical drop-in counting replacement while retaining HTSeq-compatible results and file formats.
 
-The `diagnostics` branch is tested against HTSeq 2.1.2 and supports the main `htseq-count` command-line surface, including multiple input files, single-end and paired-end data, SAM/BAM, stdin, compressed annotations, metadata columns, matrix output formats and annotated SAM/BAM output. CRAM input is supported on Linux and macOS.
+The `main` branch is tested against HTSeq 2.1.2 and supports the main `htseq-count` command-line surface, including multiple input files, single-end and paired-end data, SAM/BAM, stdin, compressed annotations, metadata columns, matrix output formats and annotated SAM/BAM output. CRAM input is supported on Linux and macOS.
 
 ## Installation
 
 Build from source with a recent stable Rust toolchain:
 
 ```bash
-git clone https://github.com/CedricHermansBIT/htseq-count-rust
-cd htseq-count-rust
+git clone https://github.com/CedricHermansBIT/TallySeq
+cd TallySeq
 cargo build --release --locked
 ```
 
@@ -169,10 +169,29 @@ The `full` profile covers single-end and paired-end data, all three overlap mode
 
 ```bash
 python -m pip install HTSeq
-python benchmarks/benchmark_real_data.py --build --profile full --repeats 3
+python benchmarks/benchmark_real_data.py \
+  --build \
+  --profile full \
+  --rust-threads 1 \
+  --nprocesses 1 \
+  --repeats 3
 ```
 
 Downloads are cached under `benchmarks/data`; JSON and Markdown results are written under `benchmarks/results`.
+
+The benchmark records the TallySeq thread/process settings, CPU model, logical CPU count, total RAM, platform/kernel, Rust/Cargo versions, Git commit, and filesystem provenance.
+
+A second benchmark, `benchmarks/benchmark_scaling.py`, measures scaling with alignment count. It deterministically cycles the real Pasilla-derived single-end records to 100,000, 1,000,000, 5,000,000, and 10,000,000 alignments by default. Exact HTSeq/TallySeq count equality is required at every target and repeat.
+
+```bash
+python benchmarks/benchmark_scaling.py \
+  --build \
+  --rust-threads 1 \
+  --nprocesses 1 \
+  --repeats 3
+```
+
+The scaling report includes median wall time, peak RSS, the HTSeq/TallySeq runtime ratio at every target, and a linear fit of runtime against millions of alignment records.
 
 ## Performance
 
