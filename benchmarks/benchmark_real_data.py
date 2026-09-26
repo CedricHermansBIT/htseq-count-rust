@@ -336,6 +336,63 @@ def version(command: str, cwd: Path) -> str:
     return lines[0] if lines else f"unknown (exit {p.returncode})"
 
 
+
+def command_output(command: list[str], cwd: Path) -> str | None:
+    try:
+        p = subprocess.run(
+            command,
+            cwd=cwd,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+    except OSError:
+        return None
+    if p.returncode != 0:
+        return None
+    value = p.stdout.strip()
+    return value or None
+
+
+def cpu_model() -> str | None:
+    try:
+        for line in Path("/proc/cpuinfo").read_text().splitlines():
+            if line.lower().startswith("model name"):
+                return line.split(":", 1)[1].strip()
+    except OSError:
+        pass
+    return platform.processor() or None
+
+
+def memory_total_kib() -> int | None:
+    try:
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            if line.startswith("MemTotal:"):
+                return int(line.split()[1])
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+def system_provenance(repo: Path) -> dict:
+    return {
+        "platform": platform.platform(),
+        "kernel": platform.release(),
+        "machine": platform.machine(),
+        "python": sys.version.split()[0],
+        "cpu_count_logical": os.cpu_count(),
+        "cpu_model": cpu_model(),
+        "memory_total_kib": memory_total_kib(),
+        "rustc": command_output(["rustc", "--version"], repo),
+        "cargo": command_output(["cargo", "--version"], repo),
+        "git_commit": command_output(["git", "rev-parse", "HEAD"], repo),
+        "filesystem": command_output(
+            ["findmnt", "-T", str(repo), "-no", "FSTYPE,SOURCE,TARGET"], repo
+        ),
+    }
+
+
 def require_pysam():
     try:
         import pysam
@@ -590,6 +647,12 @@ def write_markdown(report: dict, path: Path):
         f"Source: Zenodo DOI {DOI}",
         f"HTSeq version: {report['htseq_version']}",
         f"Rust version: {report['rust_version']}",
+        f"TallySeq threads: {report['benchmark_settings']['tallyseq_threads']}",
+        f"Processes (-n): {report['benchmark_settings']['nprocesses']}",
+        f"CPU: {report['system'].get('cpu_model') or 'unknown'}",
+        f"Logical CPUs: {report['system'].get('cpu_count_logical')}",
+        f"Platform: {report['system'].get('platform')}",
+        f"Rust: {report['system'].get('rustc') or 'unknown'}",
         "",
         "Every reported run passed exact normalized count equality. "
         "No numeric tolerance was used.",
@@ -619,7 +682,7 @@ def write_markdown(report: dict, path: Path):
         "- Core matrix: single-end and paired-end x union, intersection-strict, and intersection-nonempty x no/yes/reverse strandedness.",
         "- Targeted options: nonunique all/fraction, MAPQ 0, secondary/supplementary score, repeated feature types, repeated ID attributes, and paired position/name ordering.",
         "- nonunique=random is intentionally excluded from exact parity benchmarking because HTSeq and Rust use independent random-number generators, so exact feature assignment is not deterministic across implementations.",
-        "- Paired --samout is not benchmarked because paired SAM annotation is not implemented in TallySeq yet.",
+        "- SAM/BAM annotation output (--samout) is validated separately in the compatibility suite and is not included in this count-performance matrix because it adds an output-I/O workload.",
         "",
         "The single-end BAM is reproducibly derived from read 1 of the real paired-end BAM by removing only pairing metadata.",
         "",
@@ -653,6 +716,18 @@ def main():
     ap.add_argument("--results-dir", default="benchmarks/results")
     ap.add_argument("--rust-bin")
     ap.add_argument("--htseq-bin", default="htseq-count")
+    ap.add_argument(
+        "--rust-threads",
+        type=int,
+        default=1,
+        help="TallySeq BAM/CRAM decoding threads. Default: 1 for a fair single-thread benchmark.",
+    )
+    ap.add_argument(
+        "--nprocesses",
+        type=int,
+        default=1,
+        help="Alignment files processed concurrently by both tools. Default: 1.",
+    )
     ap.add_argument("--build", action="store_true")
     ap.add_argument(
         "--profile",
@@ -670,6 +745,10 @@ def main():
 
     if args.repeats < 1:
         ap.error("--repeats must be >= 1")
+    if args.rust_threads < 1:
+        ap.error("--rust-threads must be >= 1")
+    if args.nprocesses < 1:
+        ap.error("--nprocesses must be >= 1")
 
     repo = Path(args.repo).expanduser().resolve()
     cache = Path(args.cache_dir)
@@ -700,6 +779,8 @@ def main():
     print(f"Data:     Zenodo DOI {DOI}")
     print(f"Profile:  {args.profile}")
     print(f"Scenarios:{len(scenarios)}")
+    print(f"TallySeq threads: {args.rust_threads}")
+    print(f"Processes (-n):   {args.nprocesses}")
 
     gtf = download_verified("gtf", cache)
     paired_pos = {
@@ -740,8 +821,24 @@ def main():
                 inputs[dataset]["single"],
             )
             options = scenario.options()
-            rust_cmd = [str(rust), *options, str(bam), str(gtf)]
-            htseq_cmd = [htseq, *options, str(bam), str(gtf)]
+            rust_cmd = [
+                str(rust),
+                "--threads",
+                str(args.rust_threads),
+                "-n",
+                str(args.nprocesses),
+                *options,
+                str(bam),
+                str(gtf),
+            ]
+            htseq_cmd = [
+                htseq,
+                "-n",
+                str(args.nprocesses),
+                *options,
+                str(bam),
+                str(gtf),
+            ]
 
             print(
                 f"\n[scenario] {scenario.name} "
@@ -819,7 +916,7 @@ def main():
                 )
 
     report = {
-        "schema_version": 2,
+        "schema_version": 3,
         "zenodo_record": RECORD,
         "zenodo_doi": DOI,
         "datasets": datasets,
@@ -832,17 +929,21 @@ def main():
         "excluded_from_exact_matrix": [
             "nonunique=random: independent RNGs make exact ambiguous-feature "
             "assignment nondeterministic across implementations",
-            "paired samout: not yet implemented in TallySeq",
+            "samout output is validated in the compatibility suite rather than "
+            "the count-performance matrix because writing annotated alignments "
+            "measures an additional I/O workload",
         ],
+        "benchmark_settings": {
+            "repeats": args.repeats,
+            "tallyseq_threads": args.rust_threads,
+            "nprocesses": args.nprocesses,
+            "execution_order": "alternated by repeat to reduce systematic page-cache bias",
+        },
         "rust_binary": str(rust),
         "rust_version": version(str(rust), repo),
         "htseq_binary": htseq,
         "htseq_version": version(htseq, repo),
-        "system": {
-            "platform": platform.platform(),
-            "python": sys.version.split()[0],
-            "cpu_count": os.cpu_count(),
-        },
+        "system": system_provenance(repo),
         "scenarios": [asdict(s) for s in scenarios],
         "input_stats": input_stats,
         "files": {
